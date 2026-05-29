@@ -1,0 +1,28 @@
+# Compiled binaries
+exchange
+
+# Object files
+*.o
+
+# Static libraries
+*.a
+
+# Shared libraries
+*.so
+
+# CMake
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# VS Code
+.vscode/
+
+# CLion
+.idea/
+
+# Temporary files
+*.swp
+*.tmp

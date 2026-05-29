@@ -5,7 +5,7 @@ struct BuyComparator{
 
     bool operator()(const Order& a, const Order& b){
         if(a.price == b.price){
-            return a.timestamp > b.timestamp;
+            return a.seqNo > b.seqNo;
         }
         return a.price < b.price;
     }

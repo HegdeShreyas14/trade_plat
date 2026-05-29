@@ -1,14 +1,20 @@
 #include<bits/stdc++.h>
 #include "OrderBook.h"
+#include "MatchingEngine.h"
 
 
 int main(){
 
-    OrderBook book;
-    book.buyOrders.push(Order(1 , 10 , true , 100.00));
-    book.buyOrders.push(Order(2 , 10 , true , 105.00));
-    book.buyOrders.push(Order(3 , 10 , true , 103.00));
+    MatchingEngine engine;
 
-    std::cout <<book.buyOrders.top().price<<std::endl;
-    return 0;
+    engine.addOrder(
+        Order(1,100,true,105));
+
+    engine.addOrder(
+        Order(2,30,false,104));
+
+    engine.addOrder(
+        Order(3,20,false,105));
+
+    engine.printTradeHistory();
 }

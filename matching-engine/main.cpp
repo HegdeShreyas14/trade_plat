@@ -1,10 +1,14 @@
 #include<bits/stdc++.h>
-#include "Order.h"
+#include "OrderBook.h"
+
 
 int main(){
-        Order ord(1 , 6, true , 105.5);
 
-        std::cout<<ord.OrderId<<std::endl;
+    OrderBook book;
+    book.buyOrders.push(Order(1 , 10 , true , 100.00));
+    book.buyOrders.push(Order(2 , 10 , true , 105.00));
+    book.buyOrders.push(Order(3 , 10 , true , 103.00));
 
-        return 0;
+    std::cout <<book.buyOrders.top().price<<std::endl;
+    return 0;
 }

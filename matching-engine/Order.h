@@ -7,7 +7,7 @@ struct Order{
     double price;
     long long timestamp;
 
-    Order(int Id, int qty, bool buy, double p)
+    Order(int Id, int qty, bool buy, double p)  // using initialiser list with constructor for better efficiency
     : OrderId(Id),
       quantity(qty),
       IsBuy(buy),

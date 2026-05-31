@@ -4,24 +4,13 @@ A C++ implementation of a price-time priority order matching engine inspired by 
 
 ## Features
 
-* Buy and sell order books using priority queues
+* Buy and sell order books using maps and lists
 * Price-time priority matching
 * Partial order fills
 * Trade history recording
 * Sequence-number based order precedence
 * Maker/taker style execution pricing
-
-## Current Architecture
-
-```text
-Order
-  ↓
-OrderBook
-  ↓
-MatchingEngine
-  ↓
-TradeHistory
-```
+* Memory Pool and Multiple Producer Single Consumer(MPSC) queue added for minimal overhead
 
 
 ## Example
@@ -39,16 +28,16 @@ BUY LOT 1 SELL LOT 2 QTY 30 PRICE 105
 
 ## Further Scope
 
-* TCP trading gateway
+* TCP trading gateway(in progress)
 * Multi-client support
-* Bot fleet simulation
+* Bot fleet simulation(in progress)
 * Telemetry and benchmarking
 * Dockerized deployment
 * Submission and evaluation framework
 
 
 ## Tech Stack
-
+Most of the layers yet to be updated
 | Layer | Technology | Reason |
 | :--- | :--- | :--- |
 | **Exchange Core** | C++23 | Zero-overhead, direct memory control. |

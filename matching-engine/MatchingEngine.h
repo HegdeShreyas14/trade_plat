@@ -17,4 +17,6 @@ public:
     void cancelOrder(int orderId);
 
     void printTradeHistory();
+
+    void printOrderBook();
 };

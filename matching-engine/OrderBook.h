@@ -1,14 +1,20 @@
 #pragma once
 #include<chrono>
-#include<bits/stdc++.h>
+#include<map>
+#include<list>
+#include<unordered_map>
 #include "Order.h"
-#include "BuyComparator.h"
-#include "SellComparator.h"
 
 class OrderBook{
-
     public:
-        std::priority_queue< Order, std::vector<Order>, BuyComparator> buyOrders;
+        std::map<double, std::list<Order>, std::greater<double>> buyOrders;
+        std::map<double, std::list<Order>, std::less<double>> sellOrders;
 
-        std::priority_queue< Order, std::vector<Order>, SellComparator> sellOrders;
+        struct OrderLocation {
+            bool isBuy;
+            double price;
+            std::list<Order>::iterator iterator;
+        };
+
+        std::unordered_map<int, OrderLocation> orderMap;
 };

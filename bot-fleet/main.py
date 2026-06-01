@@ -1,10 +1,17 @@
-import struct
 import asyncio
 import random
 import time
 import argparse
+import struct
+import socket
+import os
+import base64
+import hashlib
 
 class Bot:
+    # Protocol V2: 32-byte little-endian wire frame with explicit 3-byte tail padding.
+    ORDER_FORMAT = "<QQdIB3x"
+
     def __init__(self, bot_id, host, port):
         self.bot_id = bot_id
         self.host = host
@@ -24,9 +31,33 @@ class Bot:
         while self.running:
             try:
                 self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
+                sock = self.writer.get_extra_info('socket')
+                if sock:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+                key = base64.b64encode(os.urandom(16)).decode("ascii")
+                request = (
+                    "GET /orders HTTP/1.1\r\n"
+                    f"Host: {self.host}:{self.port}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    f"Sec-WebSocket-Key: {key}\r\n"
+                    "Sec-WebSocket-Version: 13\r\n\r\n"
+                )
+                self.writer.write(request.encode("ascii"))
+                await self.writer.drain()
+
+                response = await self.reader.readuntil(b"\r\n\r\n")
+                accept_src = (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+                expected_accept = base64.b64encode(hashlib.sha1(accept_src).digest()).decode("ascii")
+                if b" 101 " not in response or expected_accept.encode("ascii") not in response:
+                    self.writer.close()
+                    await self.writer.wait_closed()
+                    raise OSError("WebSocket upgrade failed")
+
                 backoff = 1.0  # Reset on successful connection
                 return True
-            except (ConnectionRefusedError, OSError):
+            except (ConnectionRefusedError, OSError, asyncio.IncompleteReadError):
                 self.connection_drops += 1
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 10.0)  # Exponential backoff, max 10s
@@ -46,20 +77,43 @@ class Bot:
         return self.order_id_counter
 
     def format_order(self, side, qty, price):
-        # Format: (uint64_t)ID (uint64_t)TIMESTAMP_NS (double)PRICE (uint32_t)QTY (uint8_t)SIDE
-        timestamp_ns = time.time_ns()
-        side_val = getattr(side, 'encode', lambda: b'B')()[0] if isinstance(side, str) else side
-        # Struct <QQdIB corresponds to Little Endian: 8+8+8+4+1 bytes = 29 bytes exact
-        return struct.pack('<QQdIB', self.generate_order_id(), timestamp_ns, float(price), int(qty), side_val)
+        # Convert ASCII side to a 1-byte integer (1 for Buy, 2 for Sell)
+        side_code = 1 if side == 'B' else 2
+        
+        # Pack the data directly into a 32-byte binary struct
+        return struct.pack(
+            self.ORDER_FORMAT,
+            self.generate_order_id(),
+            time.time_ns(),
+            float(price),
+            int(qty),
+            side_code
+        )
+
+    def websocket_binary_frame(self, payload):
+        payload_len = len(payload)
+        mask = os.urandom(4)
+        header = bytearray([0x82])
+        if payload_len < 126:
+            header.append(0x80 | payload_len)
+        elif payload_len <= 0xFFFF:
+            header.append(0x80 | 126)
+            header.extend(payload_len.to_bytes(2, "big"))
+        else:
+            header.append(0x80 | 127)
+            header.extend(payload_len.to_bytes(8, "big"))
+        header.extend(mask)
+        header.extend(byte ^ mask[i & 3] for i, byte in enumerate(payload))
+        return bytes(header)
 
     async def read_loop(self):
         while self.running and self.reader:
             try:
-                line = await self.reader.readline()
-                if not line:
+                # Read chunks to drain the socket, preventing TCP backpressure.
+                # Using read() instead of readline() so it works with binary ACKs.
+                data = await self.reader.read(4096)
+                if not data:
                     break  # Connection closed by server
-                # Future: Parse ACKs, Executions, Rejects here
-                # e.g., if "FILLED" update inventory models
             except Exception:
                 break
         
@@ -76,7 +130,7 @@ class Bot:
             asyncio.create_task(self.read_loop())
 
         try:
-            self.writer.write(order_bytes)
+            self.writer.write(self.websocket_binary_frame(order_bytes))
             await self.writer.drain()
             self.orders_sent += 1
         except Exception:
@@ -106,8 +160,6 @@ class MarketMakerBot(Bot):
         spread = 0.5
         while self.running:
             # Inventory adjustment:
-            # If long (too many buys), skew prices lower to encourage selling
-            # If short (too many sells), skew prices higher to encourage buying
             skew = (self.inventory / 1000.0) * spread 
             
             bid_price = mid_price - spread - skew
@@ -117,7 +169,6 @@ class MarketMakerBot(Bot):
             await self.send_order(self.format_order('B', qty, bid_price))
             await self.send_order(self.format_order('S', qty, ask_price))
 
-            # Simulate inventory accumulation slightly for testing purposes until real ACKs
             self.inventory += random.randint(-5, 5)
 
             mid_price += random.uniform(-0.1, 0.1)
@@ -168,7 +219,7 @@ async def metrics_reporter(bots, interval=5.0):
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Trading Bot Fleet")
+    parser = argparse.ArgumentParser(description="Trading Bot Fleet (WebSocket Binary V2 Protocol)")
     parser.add_argument("--host", default='127.0.0.1')
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--mm", type=int, default=50, help="Number of Market Makers")
@@ -194,6 +245,8 @@ async def main():
 
     print(f"Spawning {len(bots)} bots...")
     bot_tasks = [asyncio.create_task(bot.run()) for bot in bots]
+    
+    # 2-second interval for faster metric feedback during benchmarks
     reporter_task = asyncio.create_task(metrics_reporter(bots, interval=2.0))
     
     try:
@@ -202,7 +255,7 @@ async def main():
         else:
             await asyncio.Event().wait()  # Run forever
     except KeyboardInterrupt:
-        print("Stopping Bot Fleet...")
+        print("\nStopping Bot Fleet...")
     finally:
         reporter_task.cancel()
         for bot in bots:

@@ -4,11 +4,7 @@
 #include <cstddef>
 #include <stdexcept>
 
-#ifdef __cpp_lib_hardware_interference_size
-    constexpr std::size_t SPSC_CACHE_LINE_SIZE = std::hardware_destructive_interference_size;
-#else
-    constexpr std::size_t SPSC_CACHE_LINE_SIZE = 64;
-#endif
+constexpr std::size_t SPSC_CACHE_LINE_SIZE = 64;
 
 template<typename T>
 class SPSCQueue {

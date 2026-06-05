@@ -5,13 +5,8 @@
 #include <cstddef>
 #include <stdexcept>
 
-// Hardware interference size is often 64 bytes. We use it to pad
-// atomics to avoid false sharing between the producer and consumer.
-#ifdef __cpp_lib_hardware_interference_size
-    constexpr std::size_t CACHE_LINE_SIZE = std::hardware_destructive_interference_size;
-#else
-    constexpr std::size_t CACHE_LINE_SIZE = 64;
-#endif
+// Stable cache-line padding to avoid false sharing between queue cursors.
+constexpr std::size_t CACHE_LINE_SIZE = 64;
 
 template<typename T>
 class MPSCQueue {

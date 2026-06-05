@@ -1,24 +1,42 @@
-#include<bits/stdc++.h>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <chrono>
+
 #include "OrderBook.h"
 #include "MatchingEngine.h"
+#include "networking/TCPServer.h"
 
-int main(){
+int main() {
+    std::cout << "Starting Trading Benchmark Evaluator Runtime...\n";
+
     MatchingEngine engine;
+    engine.start();
 
-    engine.addOrder(Order(1,100,true,105)); 
-    engine.addOrder(Order(2,50,true,104)); 
-    engine.addOrder(Order(3,30,false,110)); 
-    engine.addOrder(Order(4,20,false,111)); 
+    // Start TCP Epoll Gateway 
+    // Passes reference to engine for bot connections
+    TCPServer server(8080, engine);
+    server.start();
 
-    engine.printOrderBook();
+    std::cout << "==========================================\n";
+    std::cout << "TCP Server accepting connections on port 8080\n";
+    std::cout << "Order string format sent by bots: <ID> <B/S> <QTY> <PRICE>\n";
+    std::cout << "Example: 1 B 100 105.0\n";
+    std::cout << "Engine is running in headless daemon mode.\n";
+    std::cout << "==========================================\n";
 
-    engine.cancelOrder(2);
-    std::cout << "\nAfter cancellation of order ID 2:" << std::endl;
-    engine.printOrderBook();
+    // Run daemonized, loop infinitely
+    while(true) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    std::cout << "Terminating runtime gracefully...\n";
+
+    // Clean teardown
+    server.stop();
+    engine.stop();
     
-    // Add crossing order
-    engine.addOrder(Order(5,150,false,105)); 
-    std::cout << "\nAfter match:" << std::endl;
+    std::cout << "Final order book state:\n";
     engine.printOrderBook();
 
     return 0;

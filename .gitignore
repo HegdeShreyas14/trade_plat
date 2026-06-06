@@ -1,28 +1,18 @@
-# Compiled binaries
-exchange
-
-# Object files
+# ==========================================
+# C++ Build Artifacts & Binaries
+# ==========================================
+# Ignore intermediate object files and debug dumps
 *.o
+*.obj
+*.debug
+*.d
 
-# Static libraries
-*.a
+# Ignore the compiled final binary engines
+matching-engine/engine
 
-# Shared libraries
-*.so
-
-# CMake
-build/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-
-# VS Code
-.vscode/
-
-# CLion
-.idea/
-
-# Temporary files
-*.swp
-*.tmp
+# ==========================================
+# Runtime Telemetry Logs & Performance Metrics
+# ==========================================
+# Ignore all generated benchmarking logs
+*.log
+matching-engine/engine_bench*.log

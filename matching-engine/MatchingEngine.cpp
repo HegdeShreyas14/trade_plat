@@ -5,8 +5,11 @@
 #include <emmintrin.h>
 #include <pthread.h>
 #include <sched.h>
-#include "OrderBook.h"
+#include <vector>
 #include "MatchingEngine.h"
+
+// Define a structural histogram ring-buffer dimension for lock-free telemetry tracking
+constexpr size_t LATENCY_BUCKETS = 100000; // Tracks up to 100ms with 1us resolution
 
 MatchingEngine::~MatchingEngine() {
     stop();
@@ -35,8 +38,14 @@ void MatchingEngine::enqueueOrder(const Order& order) {
 void MatchingEngine::processLoop() {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(1, &cpuset);
+    CPU_SET(1, &cpuset); // Pin matching loop strictly to Core 1
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+    // Pre-allocate thread-local arrays to store latency buckets safely without mutex overhead
+    // Bucket index = latency in microseconds
+    std::vector<uint32_t> local_engine_hist(LATENCY_BUCKETS, 0);
+    std::vector<uint32_t> local_network_hist(LATENCY_BUCKETS, 0);
+    uint64_t loop_counter = 0;
 
     Order order;
     while (isRunning) {
@@ -46,15 +55,36 @@ void MatchingEngine::processLoop() {
             long long t2 = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
             
-            {
-                std::lock_guard<std::mutex> lock(latency_mutex);
-                if (order.t1 > 0) engine_latencies.push_back(t2 - order.t1);
-                if (order.t0 > 0 && order.t1 > 0) network_latencies.push_back(order.t1 - order.t0);
+            // Lock-free metric collection: track microsecond values inside our metrics buckets
+            if (order.t1 > 0) {
+                long long e_us = (t2 - order.t1) / 1000;
+                if (e_us >= 0 && e_us < static_cast<long long>(LATENCY_BUCKETS)) {
+                    local_engine_hist[e_us]++;
+                }
             }
+            if (order.t0 > 0 && order.t1 > 0) {
+                long long n_us = (order.t1 - order.t0) / 1000;
+                if (n_us >= 0 && n_us < static_cast<long long>(LATENCY_BUCKETS)) {
+                    local_network_hist[n_us]++;
+                }
+            }
+
             orders_processed.fetch_add(1, std::memory_order_relaxed);
+            loop_counter++;
+
+            // Periodically flush tracking buckets asynchronously to the metrics engine
+            if (loop_counter % 65536 == 0) {
+                std::lock_guard<std::mutex> lock(latency_mutex);
+                for (size_t i = 0; i < LATENCY_BUCKETS; ++i) {
+                    shared_engine_histogram[i] += local_engine_hist[i];
+                    shared_network_histogram[i] += local_network_hist[i];
+                }
+                std::fill(local_engine_hist.begin(), local_engine_hist.end(), 0);
+                std::fill(local_network_hist.begin(), local_network_hist.end(), 0);
+            }
             
         } else {
-            _mm_pause();
+            _mm_pause(); // Low latency backoff to preserve pipeline decode capacity
         }
     }
 }
@@ -65,6 +95,9 @@ void MatchingEngine::metricsLoop() {
     uint64_t last_orders_dropped = 0;
     uint64_t last_trade_events_dropped = 0;
     uint64_t last_trade_events_delivered = 0;
+
+    std::vector<uint64_t> snapshot_engine(LATENCY_BUCKETS, 0);
+    std::vector<uint64_t> snapshot_network(LATENCY_BUCKETS, 0);
 
     while (isRunning) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -88,18 +121,27 @@ void MatchingEngine::metricsLoop() {
         last_trade_events_dropped = current_trade_event_drops;
         last_trade_events_delivered = current_trade_event_delivered;
 
-        std::vector<long long> e_lat, n_lat;
+        // Snapshot histograms quickly to minimize contention window
         {
             std::lock_guard<std::mutex> lock(latency_mutex);
-            e_lat.swap(engine_latencies);
-            n_lat.swap(network_latencies);
+            std::copy(shared_engine_histogram.begin(), shared_engine_histogram.end(), snapshot_engine.begin());
+            std::copy(shared_network_histogram.begin(), shared_network_histogram.end(), snapshot_network.begin());
+            std::fill(shared_engine_histogram.begin(), shared_engine_histogram.end(), 0);
+            std::fill(shared_network_histogram.begin(), shared_network_histogram.end(), 0);
         }
 
-        auto calc_percentile = [](std::vector<long long>& v, double p) -> long long {
-            if (v.empty()) return 0;
-            size_t idx = static_cast<size_t>((v.size() - 1) * p);
-            std::nth_element(v.begin(), v.begin() + idx, v.end());
-            return v[idx];
+        auto calc_hist_percentile = [](const std::vector<uint64_t>& hist, double p) -> long long {
+            uint64_t total_elements = 0;
+            for (auto count : hist) total_elements += count;
+            if (total_elements == 0) return 0;
+
+            uint64_t target = static_cast<uint64_t>(total_elements * p);
+            uint64_t accumulated = 0;
+            for (size_t i = 0; i < hist.size(); ++i) {
+                accumulated += hist[i];
+                if (accumulated >= target) return i; // Returns calculated latency value directly in microseconds
+            }
+            return 0;
         };
 
         std::cout << "\n=== Engine Metrics (1s window) ===\n";
@@ -109,41 +151,48 @@ void MatchingEngine::metricsLoop() {
         std::cout << "Kafka Events  : " << event_delivered << "/sec, drops=" << event_drops
                   << ", depth=" << kafkaOffloader.queueDepth() << "\n";
         
-        if (!n_lat.empty()) {
-            std::cout << "Network Lat   : p50=" << calc_percentile(n_lat, 0.50) / 1000 << "us, p90=" 
-                      << calc_percentile(n_lat, 0.90) / 1000 << "us, p99=" << calc_percentile(n_lat, 0.99) / 1000 << "us\n";
-        }
-        if (!e_lat.empty()) {
-            std::cout << "Engine Lat    : p50=" << calc_percentile(e_lat, 0.50) / 1000 << "us, p90=" 
-                      << calc_percentile(e_lat, 0.90) / 1000 << "us, p99=" << calc_percentile(e_lat, 0.99) / 1000 << "us\n";
-        }
+        std::cout << "Network Lat   : p50=" << calc_hist_percentile(snapshot_network, 0.50) << "us, p90=" 
+                  << calc_hist_percentile(snapshot_network, 0.90) << "us, p99=" << calc_hist_percentile(snapshot_network, 0.99) << "us\n";
+
+        std::cout << "Engine Lat    : p50=" << calc_hist_percentile(snapshot_engine, 0.50) << "us, p90=" 
+                  << calc_hist_percentile(snapshot_engine, 0.90) << "us, p99=" << calc_hist_percentile(snapshot_engine, 0.99) << "us\n";
         std::cout << "==================================\n";
     }
 }
 
 void MatchingEngine::addOrder(const Order& order) {
     if (order.IsBuy) {
-        book.buyOrders[order.price].push_back(order);
-        book.orderMap[order.OrderId] = {true, order.price, std::prev(book.buyOrders[order.price].end())};
+        auto& vec = book.buyOrders[order.price];
+        vec.push_back(order);
+        book.orderMap[order.OrderId] = {true, order.price, vec.size() - 1};
     } else {
-        book.sellOrders[order.price].push_back(order);
-        book.orderMap[order.OrderId] = {false, order.price, std::prev(book.sellOrders[order.price].end())};
+        auto& vec = book.sellOrders[order.price];
+        vec.push_back(order);
+        book.orderMap[order.OrderId] = {false, order.price, vec.size() - 1};
     }
     matching();
 }
 
 void MatchingEngine::matching() {
     while (!book.buyOrders.empty() && !book.sellOrders.empty()) {
-        auto bestBuyIt = book.buyOrders.begin();
-        auto bestSellIt = book.sellOrders.begin();
+        auto bestBuyIt = book.buyOrders.begin();  // Highest Bid
+        auto bestSellIt = book.sellOrders.begin(); // Lowest Ask
 
         if (bestBuyIt->first < bestSellIt->first) break;
 
-        auto& buyList = bestBuyIt->second;
-        auto& sellList = bestSellIt->second;
+        auto& buyVec = bestBuyIt->second;
+        auto& sellVec = bestSellIt->second;
 
-        Order& buy = buyList.front();
-        Order& sell = sellList.front();
+        // Vectors should never be empty if the key exists in the map
+        if (buyVec.empty() || sellVec.empty()) {
+            if (buyVec.empty()) book.buyOrders.erase(bestBuyIt);
+            if (sellVec.empty()) book.sellOrders.erase(bestSellIt);
+            continue;
+        }
+
+        // Target the front elements directly via array index 0
+        Order& buy = buyVec.front();
+        Order& sell = sellVec.front();
 
         int tradedqty = std::min(buy.quantity, sell.quantity);
 
@@ -163,28 +212,29 @@ void MatchingEngine::matching() {
             executionPrice,
             static_cast<uint32_t>(tradedqty)
         };
+        
         if (!kafkaOffloader.publish(event)) {
             trade_events_dropped.fetch_add(1, std::memory_order_relaxed);
         }
-
-        // suppressing std::cout logs for trade executions to avoid skewed benchmark latency!
         
         trades_executed.fetch_add(1, std::memory_order_relaxed);
 
         buy.quantity -= tradedqty;
         sell.quantity -= tradedqty;
 
+        // Instead of shifting memory with pop_front, erase the single element cleanly
+        // If the entire price level vector is exhausted, drop the map key entirely
         if (buy.quantity == 0) {
             book.orderMap.erase(buy.OrderId);
-            buyList.pop_front();
+            buyVec.erase(buyVec.begin());
         }
         if (sell.quantity == 0) {
             book.orderMap.erase(sell.OrderId);
-            sellList.pop_front();
+            sellVec.erase(sellVec.begin());
         }
 
-        if (buyList.empty()) book.buyOrders.erase(bestBuyIt);
-        if (sellList.empty()) book.sellOrders.erase(bestSellIt);
+        if (buyVec.empty()) book.buyOrders.erase(bestBuyIt);
+        if (sellVec.empty()) book.sellOrders.erase(bestSellIt);
     }
 }
 
@@ -193,13 +243,17 @@ void MatchingEngine::cancelOrder(int orderid) {
     if (it != book.orderMap.end()) {
         auto loc = it->second;
         if (loc.isBuy) {
-            auto& list = book.buyOrders[loc.price];
-            list.erase(loc.iterator);
-            if (list.empty()) book.buyOrders.erase(loc.price);
+            auto& vec = book.buyOrders[loc.price];
+            if (loc.vector_index < vec.size()) {
+                vec.erase(vec.begin() + loc.vector_index);
+            }
+            if (vec.empty()) book.buyOrders.erase(loc.price);
         } else {
-            auto& list = book.sellOrders[loc.price];
-            list.erase(loc.iterator);
-            if (list.empty()) book.sellOrders.erase(loc.price);
+            auto& vec = book.sellOrders[loc.price];
+            if (loc.vector_index < vec.size()) {
+                vec.erase(vec.begin() + loc.vector_index);
+            }
+            if (vec.empty()) book.sellOrders.erase(loc.price);
         }
         book.orderMap.erase(it);
     }

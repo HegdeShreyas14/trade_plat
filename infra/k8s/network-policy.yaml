@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: contestant-exchange-isolation
+  namespace: evaluation-sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app: contestant-exchange
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              tier: telemetry-bot-fleet
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kafka-broker
+      ports:
+        - protocol: TCP
+          port: 9092

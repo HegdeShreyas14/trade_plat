@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: contestant-exchange
+  namespace: evaluation-sandbox
+  labels:
+    app: contestant-exchange
+    tier: contestant-code
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: contestant-exchange
+  template:
+    metadata:
+      labels:
+        app: contestant-exchange
+        tier: contestant-code
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      shareProcessNamespace: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: exchange-engine
+          image: contestant-submission:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: websocket
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "4"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            tcpSocket:
+              port: websocket
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: websocket
+            initialDelaySeconds: 2
+            periodSeconds: 5

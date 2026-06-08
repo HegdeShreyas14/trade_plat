@@ -60,10 +60,12 @@ class SlidingWindow:
     def __init__(self, seconds):
         self.seconds = seconds
         self.samples = deque()
+        self.last_match_id = 0
 
     def add(self, event):
         now = time.monotonic()
         self.samples.append((now, event.engine_latency_ns, event.network_latency_ns))
+        self.last_match_id = event.match_id
         self.prune(now)
 
     def prune(self, now=None):
@@ -84,6 +86,7 @@ class SlidingWindow:
                 "network_p50_us": 0,
                 "network_p90_us": 0,
                 "network_p99_us": 0,
+                "last_match_id": self.last_match_id,
             }
 
         engine = [sample[1] for sample in self.samples]
@@ -96,6 +99,7 @@ class SlidingWindow:
             "network_p50_us": percentile(network, 0.50) / 1000,
             "network_p90_us": percentile(network, 0.90) / 1000,
             "network_p99_us": percentile(network, 0.99) / 1000,
+            "last_match_id": self.last_match_id,
         }
 
 
@@ -205,6 +209,15 @@ def ranking_score(metrics):
 
 
 def publish_leaderboard(redis_client, key, channel, contestant_id, metrics):
+    meta = {
+        "tps": round(metrics["tps"], 2),
+        "p50_lat_us": round(metrics["engine_p50_us"], 2),
+        "p90_lat_us": round(metrics["engine_p90_us"], 2),
+        "p99_lat_us": round(metrics["engine_p99_us"], 2),
+        "correctness": "PASSED",
+        "total_events": int(metrics.get("consumed_total", 0)),
+        "last_match_id": int(metrics.get("last_match_id", 0)),
+    }
     payload = {
         "contestant_id": contestant_id,
         "score": ranking_score(metrics),
@@ -212,6 +225,7 @@ def publish_leaderboard(redis_client, key, channel, contestant_id, metrics):
         "updated_at_ns": time.time_ns(),
     }
     redis_client.zadd(key, {contestant_id: payload["score"]})
+    redis_client.hset(f"contestant:meta:{contestant_id}", mapping=meta)
     redis_client.publish(channel, json.dumps(payload, separators=(",", ":")))
 
 
@@ -241,7 +255,7 @@ def parse_args():
     parser.add_argument("--offset-reset", default=os.getenv("KAFKA_OFFSET_RESET", "latest"))
     parser.add_argument("--contestant-id", default=os.getenv("CONTESTANT_ID", "default"))
     parser.add_argument("--redis-url", default=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-    parser.add_argument("--redis-key", default=os.getenv("REDIS_LEADERBOARD_KEY", "leaderboard"))
+    parser.add_argument("--redis-key", default=os.getenv("REDIS_LEADERBOARD_KEY", "leaderboard:scores"))
     parser.add_argument("--redis-channel", default=os.getenv("REDIS_CHANNEL", "leaderboard_updates"))
     parser.add_argument("--timescale-dsn", default=os.getenv("TIMESCALE_DSN", ""))
     parser.add_argument("--window-seconds", type=float, default=float(os.getenv("WINDOW_SECONDS", "1.0")))

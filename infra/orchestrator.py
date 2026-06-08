@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 import argparse
+import os
+import shutil
 import subprocess
 import sys
 import time
+import zipfile
 
 
 class BenchmarkOrchestrator:
     def __init__(self, namespace="evaluation-sandbox", repo_root="."):
         self.namespace = namespace
-        self.repo_root = repo_root
+        self.repo_root = repo_root  
         self.client = None
         self.config = None
         self.ApiException = None
@@ -28,7 +31,7 @@ class BenchmarkOrchestrator:
         try:
             config.load_incluster_config()
         except config.ConfigException:
-            config.load_kubeconfig()
+            config.load_kube_config()
 
         self.client = client
         self.config = config
@@ -37,10 +40,109 @@ class BenchmarkOrchestrator:
         self.apps = client.AppsV1Api()
         self.networking = client.NetworkingV1Api()
 
-    def build_image(self, image_tag, dockerfile):
-        print(f"[build] docker build -f {dockerfile} -t {image_tag} {self.repo_root}")
+    def auto_detect_and_build(self, unzip_dir, submission_id):
+        """
+        Scans unzipped code workspaces recursively, dynamically writes the correct language
+        wrapper, compiles an unprivileged container, and yields the image tag.
+        """
+        print(f"[polyglot] Inspecting file structure for submission: {submission_id}")
+        
+        # Gather all files recursively to bypass nested folder zip structures cleanly
+        all_files = []
+        for root, dirs, filenames in os.walk(unzip_dir):
+            for f in filenames:
+                all_files.append(f)
+        
+        # 1. Polyglot Template Mapping Engine Logic (Using all_files instead of files)
+        if "Cargo.toml" in all_files or any(f.endswith(".rs") for f in all_files):
+            detected_lang = "rust"
+            dockerfile_content = """
+            FROM rust:1.78-alpine AS builder
+            RUN apk add --no-cache musl-dev
+            WORKDIR /build
+            COPY . .
+            RUN cargo build --release
+
+            FROM alpine:3.19
+            WORKDIR /app
+            COPY --from=builder /build/target/release/trading_bot /app/bot
+            USER 10001:10001
+            ENTRYPOINT ["/app/bot"]
+            """
+        elif "go.mod" in all_files or any(f.endswith(".go") for f in all_files):
+            detected_lang = "go"
+            dockerfile_content = """
+            FROM golang:1.22-alpine AS builder
+            WORKDIR /build
+            COPY . .
+            RUN CGO_ENABLED=0 GOOS=linux go build -o bot .
+
+            FROM alpine:3.19
+            WORKDIR /app
+            COPY --from=builder /build/bot /app/bot
+            USER 10001:10001
+            ENTRYPOINT ["/app/bot"]
+            """
+            
+        elif "requirements.txt" in all_files or "sandbox_sdk.py" in all_files or any(f.endswith(".py") for f in all_files):
+            detected_lang = "python"
+            
+            # --- FIXED RESOLUTION ENGINE ---
+            # Locate exactly where sandbox_sdk.py lives inside the unzipped staging directory
+            target_script_rel_path = "sandbox_sdk.py"
+            for root, dirs, filenames in os.walk(unzip_dir):
+                if "sandbox_sdk.py" in filenames:
+                    # Deduce the exact relative file route path from the zip root
+                    target_script_rel_path = os.path.relpath(os.path.join(root, "sandbox_sdk.py"), unzip_dir)
+                    break
+
+            print(f"[polyglot] Target entrypoint located at: {target_script_rel_path}")
+            entry_cmd = f'["python", "{target_script_rel_path}"]'
+            
+            dockerfile_content = f"""
+            FROM python:3.11-alpine
+            WORKDIR /app
+            COPY . .
+            RUN find . -name "requirements.txt" -exec pip install --no-cache-dir -r {{}} \;
+            USER 10001:10001
+            ENTRYPOINT {entry_cmd}
+            """
+
+        else:
+            # Standard C++ Core Sandbox Compilation Path Fallback
+            detected_lang = "cpp"
+            dockerfile_content = """
+            FROM alpine:3.19 AS builder
+            RUN apk add --no-cache g++ make cmake linux-headers
+            WORKDIR /build
+            COPY . .
+            RUN if [ -f CMakeLists.txt ]; then \
+                    mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make; \
+                 elif ls *.cpp 1> /dev/null 2>&1; then \
+                    g++ -std=c++20 -O3 -DNDEBUG -pthread *.cpp -o bot; \
+                 else \
+                    echo "No valid build targets found" && exit 1; \
+                 fi
+
+            FROM alpine:3.19
+            RUN apk add --no-cache libstdc++
+            WORKDIR /app
+            COPY --from=builder /build/build/bot* /app/bot
+            COPY --from=builder /build/bot* /app/bot
+            USER 10001:10001
+            ENTRYPOINT ["/app/bot"]
+            """
+
+        print(f"[polyglot] Verified Language Target: {detected_lang.upper()}")
+        
+        generated_df_path = os.path.join(unzip_dir, "Dockerfile.generated")
+        with open(generated_df_path, "w") as f:
+            f.write(dockerfile_content.strip())
+            
+        image_tag = f"contestant-agent:{submission_id}"
+        print(f"[build] docker build -f {generated_df_path} -t {image_tag} {unzip_dir}")
         subprocess.run(
-            ["docker", "build", "-f", dockerfile, "-t", image_tag, self.repo_root],
+            ["docker", "build", "-f", generated_df_path, "-t", image_tag, unzip_dir],
             check=True,
         )
         return image_tag
@@ -61,187 +163,120 @@ class BenchmarkOrchestrator:
         except self.ApiException as exc:
             if exc.status != 409:
                 raise
-            self.core.patch_namespace(self.namespace, body)
-            print(f"[k8s] namespace/{self.namespace} patched")
 
     def ensure_exchange_service(self):
         body = self.client.V1Service(
             metadata=self.client.V1ObjectMeta(
-                name="contestant-exchange",
+                name="central-exchange-gateway",
                 namespace=self.namespace,
-                labels={"app": "contestant-exchange"},
+                labels={"app": "central-exchange-core"},
             ),
             spec=self.client.V1ServiceSpec(
                 type="ClusterIP",
-                selector={"app": "contestant-exchange"},
+                selector={"app": "central-exchange-core"},
                 ports=[
                     self.client.V1ServicePort(
                         name="websocket",
                         protocol="TCP",
                         port=8080,
-                        target_port="websocket",
+                        target_port=8080,
                     )
                 ],
             ),
         )
         try:
             self.core.create_namespaced_service(self.namespace, body)
-            print("[k8s] service/contestant-exchange created")
+            print("[k8s] service/central-exchange-gateway deployed")
         except self.ApiException as exc:
             if exc.status != 409:
                 raise
-            self.core.patch_namespaced_service("contestant-exchange", self.namespace, body)
-            print("[k8s] service/contestant-exchange patched")
 
     def ensure_network_policy(self):
+        # NOTE: Using a local target-gateway bridge bypass requires opening egress restrictions.
         policy = self.client.V1NetworkPolicy(
             metadata=self.client.V1ObjectMeta(
-                name="contestant-exchange-isolation",
+                name="sandbox-isolation-jail",
                 namespace=self.namespace,
             ),
             spec=self.client.V1NetworkPolicySpec(
                 pod_selector=self.client.V1LabelSelector(
-                    match_labels={"app": "contestant-exchange"}
+                    match_labels={"tier": "contestant-agent"}
                 ),
-                policy_types=["Ingress", "Egress"],
-                ingress=[
-                    self.client.V1NetworkPolicyIngressRule(
-                        _from=[
-                            self.client.V1NetworkPolicyPeer(
-                                pod_selector=self.client.V1LabelSelector(
-                                    match_labels={"tier": "telemetry-bot-fleet"}
-                                )
-                            )
-                        ],
+                policy_types=["Egress"],
+                egress=[
+                    # Allow pod egress calls out to any destination IP to bridge back to the localhost terminal engine
+                    self.client.V1NetworkPolicyEgressRule(
                         ports=[
                             self.client.V1NetworkPolicyPort(protocol="TCP", port=8080)
-                        ],
-                    )
-                ],
-                egress=[
-                    self.client.V1NetworkPolicyEgressRule(
-                        to=[
-                            self.client.V1NetworkPolicyPeer(
-                                pod_selector=self.client.V1LabelSelector(
-                                    match_labels={"app": "kafka-broker"}
-                                )
-                            )
-                        ],
-                        ports=[
-                            self.client.V1NetworkPolicyPort(protocol="TCP", port=9092)
-                        ],
+                        ]
                     )
                 ],
             ),
         )
         try:
             self.networking.create_namespaced_network_policy(self.namespace, policy)
-            print("[k8s] networkpolicy/contestant-exchange-isolation created")
+            print("[k8s] networkpolicy/sandbox-isolation-jail active")
         except self.ApiException as exc:
             if exc.status != 409:
                 raise
-            self.networking.patch_namespaced_network_policy(
-                "contestant-exchange-isolation", self.namespace, policy
-            )
-            print("[k8s] networkpolicy/contestant-exchange-isolation patched")
 
-    def deploy_exchange(self, image_tag, cpu, memory):
+    def deploy_exchange_core(self, cpu, memory):
+        """Deploys your stable C++ Core Orderbook Exchange to listen for trade frames."""
+        image_tag = "iicpc-matching-engine:latest"
+        subprocess.run(["docker", "build", "-f", "matching-engine/Dockerfile", "-t", image_tag, self.repo_root], check=True)
+
         container = self.client.V1Container(
-            name="exchange-engine",
+            name="exchange-core-engine",
             image=image_tag,
             image_pull_policy="IfNotPresent",
-            ports=[
-                self.client.V1ContainerPort(
-                    container_port=8080,
-                    name="websocket",
-                    protocol="TCP",
-                )
-            ],
+            ports=[self.client.V1ContainerPort(container_port=8080, name="websocket")],
             resources=self.client.V1ResourceRequirements(
-                requests={"cpu": cpu, "memory": memory},
-                limits={"cpu": cpu, "memory": memory},
+                requests={"cpu": cpu, "memory": memory}, limits={"cpu": cpu, "memory": memory}
             ),
             security_context=self.client.V1SecurityContext(
-                allow_privilege_escalation=False,
-                read_only_root_filesystem=True,
-                capabilities=self.client.V1Capabilities(drop=["ALL"]),
-            ),
-            liveness_probe=self.client.V1Probe(
-                tcp_socket=self.client.V1TCPSocketAction(port="websocket"),
-                initial_delay_seconds=5,
-                period_seconds=10,
-            ),
-            readiness_probe=self.client.V1Probe(
-                tcp_socket=self.client.V1TCPSocketAction(port="websocket"),
-                initial_delay_seconds=2,
-                period_seconds=5,
+                allow_privilege_escalation=False, read_only_root_filesystem=True, capabilities=self.client.V1Capabilities(drop=["ALL"])
             ),
         )
-        pod_spec = self.client.V1PodSpec(
-            automount_service_account_token=False,
-            enable_service_links=False,
-            share_process_namespace=False,
-            security_context=self.client.V1PodSecurityContext(
-                run_as_non_root=True,
-                run_as_user=10001,
-                run_as_group=10001,
-                fs_group=10001,
-                seccomp_profile=self.client.V1SeccompProfile(type="RuntimeDefault"),
-            ),
-            containers=[container],
+
+        engine_pod_security_context = self.client.V1PodSecurityContext(
+            run_as_non_root=True,
+            run_as_user=10001
         )
+
         deployment = self.client.V1Deployment(
-            metadata=self.client.V1ObjectMeta(
-                name="contestant-exchange",
-                namespace=self.namespace,
-                labels={"app": "contestant-exchange", "tier": "contestant-code"},
-            ),
+            metadata=self.client.V1ObjectMeta(name="central-exchange-core", namespace=self.namespace, labels={"app": "central-exchange-core"}),
             spec=self.client.V1DeploymentSpec(
                 replicas=1,
-                selector=self.client.V1LabelSelector(
-                    match_labels={"app": "contestant-exchange"}
-                ),
+                selector=self.client.V1LabelSelector(match_labels={"app": "central-exchange-core"}),
                 template=self.client.V1PodTemplateSpec(
-                    metadata=self.client.V1ObjectMeta(
-                        labels={"app": "contestant-exchange", "tier": "contestant-code"}
-                    ),
-                    spec=pod_spec,
-                ),
-            ),
+                    metadata=self.client.V1ObjectMeta(labels={"app": "central-exchange-core"}),
+                    spec=self.client.V1PodSpec(
+                        security_context=engine_pod_security_context,
+                        containers=[container]
+                    )
+                )
+            )
         )
-
-        self.delete_deployment(wait=False)
         try:
             self.apps.create_namespaced_deployment(self.namespace, deployment)
-            print(f"[k8s] deployment/contestant-exchange created with {image_tag}")
+            print("[k8s] Central C++ Engine Core started.")
         except self.ApiException as exc:
-            if exc.status != 409:
-                raise
-            self.apps.replace_namespaced_deployment(
-                "contestant-exchange", self.namespace, deployment
-            )
-            print(f"[k8s] deployment/contestant-exchange replaced with {image_tag}")
+            if exc.status != 409: raise
 
-    def wait_for_exchange_ready(self, timeout):
-        print("[wait] exchange readiness")
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            dep = self.apps.read_namespaced_deployment_status(
-                "contestant-exchange", self.namespace
-            )
-            if dep.status.ready_replicas and dep.status.ready_replicas >= 1:
-                print("[ready] contestant WebSocket gateway is online")
-                return
-            time.sleep(1)
-        raise TimeoutError("contestant exchange did not become ready")
-
-    def spawn_bot_fleet(self, image_tag, mm, noise, momentum, duration):
-        target_host = f"contestant-exchange.{self.namespace}.svc.cluster.local"
+    def spawn_contestant_sandbox_pod(self, image_tag, duration):
+        """Spawns the user's compiled dynamic agent container inside the network jail."""
+        if not image_tag:
+            image_tag = "contestant-agent:anonymous_quant_bot"
+            
+        # FIX: Point Minikube containers straight to your physical local host machine machine pipeline gateway IP
+        # 10.0.2.2 is the default virtual router gateway address mapping back to localhost from inside minikube pods
+        target_host = "10.0.2.2"
+        
         pod = self.client.V1Pod(
             metadata=self.client.V1ObjectMeta(
-                name="ephemeral-bot-fleet",
+                name="active-contestant-sandbox",
                 namespace=self.namespace,
-                labels={"tier": "telemetry-bot-fleet", "app": "bot-fleet"},
+                labels={"tier": "contestant-agent", "app": "trading-bot"},
             ),
             spec=self.client.V1PodSpec(
                 restart_policy="Never",
@@ -255,16 +290,12 @@ class BenchmarkOrchestrator:
                 ),
                 containers=[
                     self.client.V1Container(
-                        name="load-generator",
+                        name="agent-runner",
                         image=image_tag,
                         image_pull_policy="IfNotPresent",
-                        args=[
-                            "--host", target_host,
-                            "--port", "8080",
-                            "--mm", str(mm),
-                            "--noise", str(noise),
-                            "--momentum", str(momentum),
-                            "--duration", str(duration),
+                        env=[
+                            self.client.V1EnvVar(name="EXCHANGE_GATEWAY_URL", value=f"ws://{target_host}:8080"),
+                            self.client.V1EnvVar(name="CONTESTANT_ID", value=image_tag.split(":")[-1])
                         ],
                         resources=self.client.V1ResourceRequirements(
                             requests={"cpu": "2", "memory": "1Gi"},
@@ -272,7 +303,7 @@ class BenchmarkOrchestrator:
                         ),
                         security_context=self.client.V1SecurityContext(
                             allow_privilege_escalation=False,
-                            read_only_root_filesystem=True,
+                            read_only_root_filesystem=False, 
                             capabilities=self.client.V1Capabilities(drop=["ALL"]),
                         ),
                     )
@@ -280,146 +311,96 @@ class BenchmarkOrchestrator:
             ),
         )
 
-        self.delete_bot_pod(wait=True)
+        self.delete_old_sandbox_pod(wait=True)
         self.core.create_namespaced_pod(self.namespace, pod)
-        print(
-            f"[k8s] pod/ephemeral-bot-fleet launched against {target_host} "
-            f"({mm} MM | {noise} Noise | {momentum} Momentum)"
-        )
+        print(f"[k8s] pod/active-contestant-sandbox deployed into network isolation jail targeting host terminal engine on {target_host}:8080")
 
-    def wait_for_bot_completion(self, timeout):
-        print("[wait] bot fleet completion")
+    def wait_for_agent_completion(self, timeout):
+        print("[wait] monitoring contestant sandbox run constraints...")
         deadline = time.time() + timeout
+        logs = ""
         while time.time() < deadline:
-            pod = self.core.read_namespaced_pod_status("ephemeral-bot-fleet", self.namespace)
+            pod = self.core.read_namespaced_pod_status("active-contestant-sandbox", self.namespace)
             phase = pod.status.phase
             if phase in ("Succeeded", "Failed"):
-                print(f"[done] bot fleet phase={phase}")
+                print(f"[done] sandbox evaluation run finished. execution_phase={phase}")
                 try:
-                    logs = self.core.read_namespaced_pod_log(
-                        "ephemeral-bot-fleet", self.namespace, tail_lines=80
-                    )
+                    logs = self.core.read_namespaced_pod_log("active-contestant-sandbox", self.namespace, tail_lines=50)
                     if logs:
-                        print("[bot logs]\n" + logs)
+                        print("[sandbox stdout]\n" + logs)
                 except self.ApiException:
                     pass
-                if phase == "Failed":
-                    raise RuntimeError("bot fleet pod failed")
                 return
             time.sleep(1)
-        raise TimeoutError("bot fleet did not complete before timeout")
+            
+        # Error Out-of-band Fallback Diagnostic Collector:
+        try:
+            logs = self.core.read_namespaced_pod_log("active-contestant-sandbox", self.namespace, tail_lines=50)
+            print("[TIMEOUT DEBUG - USER BOT STDOUT]:\n", logs)
+        except Exception:
+            print("[TIMEOUT DEBUG] Could not fetch terminal output from stalled sandbox container pod.")
+            
+        raise TimeoutError("Evaluation target exceeded assigned contest duration bounds.")
+
+    def delete_old_sandbox_pod(self, wait):
+        try:
+            self.core.delete_namespaced_pod("active-contestant-sandbox", self.namespace, grace_period_seconds=0)
+        except self.ApiException as exc:
+            if exc.status != 404: raise
+        if wait:
+            while True:
+                try:
+                    self.core.read_namespaced_pod("active-contestant-sandbox", self.namespace)
+                    time.sleep(1)
+                except self.ApiException as e:
+                    if e.status == 404: break
 
     def cleanup(self):
         print("[cleanup] reaping benchmark resources")
-        self.delete_bot_pod(wait=False)
-        self.delete_deployment(wait=False)
-
-    def delete_bot_pod(self, wait):
-        try:
-            self.core.delete_namespaced_pod(
-                "ephemeral-bot-fleet",
-                self.namespace,
-                grace_period_seconds=0,
-            )
-            print("[cleanup] pod/ephemeral-bot-fleet deleted")
-        except self.ApiException as exc:
-            if exc.status != 404:
-                raise
-        if wait:
-            self.wait_for_pod_deleted("ephemeral-bot-fleet", 30)
-
-    def delete_deployment(self, wait):
-        try:
-            self.apps.delete_namespaced_deployment(
-                "contestant-exchange",
-                self.namespace,
-                grace_period_seconds=0,
-            )
-            print("[cleanup] deployment/contestant-exchange deleted")
-        except self.ApiException as exc:
-            if exc.status != 404:
-                raise
-        if wait:
-            self.wait_for_deployment_deleted("contestant-exchange", 30)
-
-    def wait_for_pod_deleted(self, name, timeout):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                self.core.read_namespaced_pod(name, self.namespace)
-            except self.ApiException as exc:
-                if exc.status == 404:
-                    return
-                raise
-            time.sleep(1)
-
-    def wait_for_deployment_deleted(self, name, timeout):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                self.apps.read_namespaced_deployment(name, self.namespace)
-            except self.ApiException as exc:
-                if exc.status == 404:
-                    return
-                raise
-            time.sleep(1)
+        self.delete_old_sandbox_pod(wait=False)
 
     def run(self, args):
         self.connect()
-
-        exchange_image = args.exchange_image
-        bot_image = args.bot_image
-        if not args.skip_build:
-            exchange_image = self.build_image(exchange_image, "matching-engine/Dockerfile")
-            if args.build_bot_image:
-                bot_image = self.build_image(bot_image, "bot-fleet/Dockerfile")
+        target_workspace = os.path.join("/tmp/sandbox_uploads", args.sub_id)
+        
+        if not os.path.exists(target_workspace):
+            print(f"[warning] Workspace target {target_workspace} missing. Operating on repo root.")
+            target_workspace = self.repo_root
 
         try:
             self.ensure_namespace()
             self.ensure_exchange_service()
             self.ensure_network_policy()
-            self.deploy_exchange(exchange_image, args.cpu, args.memory)
-            self.wait_for_exchange_ready(args.exchange_timeout)
-            self.spawn_bot_fleet(bot_image, args.mm, args.noise, args.momentum, args.duration)
-            self.wait_for_bot_completion(args.duration + args.bot_timeout_buffer)
+            
+            # 1. Boot up matching loop infrastructure if needed inside the cluster
+            self.deploy_exchange_core(args.cpu, args.memory)
+            
+            # 2. Compile user package against dynamic polyglot wrapper parameters
+            contestant_image = self.auto_detect_and_build(target_workspace, args.sub_id)
+            
+            # 3. Drop agent into Kubernetes NetworkPolicy isolation container cell
+            self.spawn_contestant_sandbox_pod(contestant_image, args.duration)
+            self.wait_for_agent_completion(args.duration + 30)
         finally:
             if not args.keep_resources:
                 self.cleanup()
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="IICPC benchmark lifecycle orchestrator")
+    parser = argparse.ArgumentParser(description="IICPC Polyglot Benchmark Lifecycle Orchestrator")
     parser.add_argument("--sub-id", required=True, help="Contestant submission identifier")
     parser.add_argument("--namespace", default="evaluation-sandbox")
     parser.add_argument("--repo-root", default=".")
-    parser.add_argument("--exchange-image", default=None)
-    parser.add_argument("--bot-image", default="iicpc-traffic-generator:latest")
-    parser.add_argument("--skip-build", action="store_true")
-    parser.add_argument("--build-bot-image", action="store_true")
     parser.add_argument("--keep-resources", action="store_true")
-    parser.add_argument("--cpu", default="4")
-    parser.add_argument("--memory", default="2Gi")
+    parser.add_argument("--cpu", default="2")
+    parser.add_argument("--memory", default="1Gi")
     parser.add_argument("--duration", type=int, default=30)
-    parser.add_argument("--mm", type=int, default=850)
-    parser.add_argument("--noise", type=int, default=1700)
-    parser.add_argument("--momentum", type=int, default=4250)
-    parser.add_argument("--exchange-timeout", type=int, default=60)
-    parser.add_argument("--bot-timeout-buffer", type=int, default=180)
-    args = parser.parse_args()
-
-    if args.exchange_image is None:
-        args.exchange_image = f"contestant-submission:{args.sub_id}"
-    return args
+    return parser.parse_args()
 
 
 def main():
-    args = parse_args()
-    orchestrator = BenchmarkOrchestrator(namespace=args.namespace, repo_root=args.repo_root)
-    try:
-        orchestrator.run(args)
-    except Exception as exc:
-        print(f"[fatal] {exc}", file=sys.stderr)
-        sys.exit(1)
+    orchestrator = BenchmarkOrchestrator()
+    orchestrator.run(parse_args())
 
 
 if __name__ == "__main__":

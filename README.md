@@ -12,7 +12,7 @@
 The HFT Market Simulator is a real-time distributed trading platform evaluation mesh. It automatically compiles, sandboxes, and benchmarks polyglot algorithmic trading agents (Python, C++, Go, Rust) against a low-latency native C++ matching engine loop. Telemetry is streamed dynamically to provide sub-microsecond latency analytics and order-book metrics.
 
 
-### Few endpoints errors are still being fixed 
+### Few endpoint errors are still being fixed 
 
 ---
 

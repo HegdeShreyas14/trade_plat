@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 #include <algorithm>
@@ -17,7 +18,12 @@ MatchingEngine::~MatchingEngine() {
 
 void MatchingEngine::start() {
     isRunning = true;
-    kafkaOffloader.start();
+    const char* brokers_env = std::getenv("KAFKA_BROKERS");
+    const char* topic_env   = std::getenv("KAFKA_TOPIC");
+    kafkaOffloader.start(
+        brokers_env ? brokers_env : "localhost:9092",
+        topic_env   ? topic_env   : "trade-events"
+    );
     workerThread = std::thread(&MatchingEngine::processLoop, this);
     metricsThread = std::thread(&MatchingEngine::metricsLoop, this);
 }

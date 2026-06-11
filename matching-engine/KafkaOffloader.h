@@ -15,7 +15,7 @@
 #include <sched.h>
 
 #ifdef ENABLE_KAFKA
-#include <rdkafkacpp.h>
+#include <librdkafka/rdkafkacpp.h>
 #include <memory>
 #endif
 

@@ -2,29 +2,26 @@
 
 FROM alpine:3.19 AS builder
 
-RUN apk add --no-cache g++ make linux-headers
+RUN apk add --no-cache g++ make linux-headers librdkafka-dev
 
 WORKDIR /build
 
-# 1. Copy the local folder into the builder workspace explicitly
 COPY matching-engine ./matching-engine
 
-# 2. Step INTO the copied directory where main.cpp actually lives
 WORKDIR /build/matching-engine
 
-# 3. Compile using relative paths to this directory
-RUN g++ -std=c++17 -O3 -DNDEBUG -pthread \
+RUN g++ -std=c++17 -O3 -DNDEBUG -DENABLE_KAFKA -pthread \
     main.cpp MatchingEngine.cpp Order.cpp networking/TCPServer.cpp \
-    -o engine
+    -lrdkafka++ -lrdkafka -o engine
 
 FROM alpine:3.19 AS runner
 
-RUN addgroup -S -g 10001 exchange_group \
+RUN apk add --no-cache libstdc++ librdkafka \
+    && addgroup -S -g 10001 exchange_group \
     && adduser -S -D -H -u 10001 -G exchange_group exchange_user
 
 WORKDIR /app
 
-# 4. Pull the binary explicitly from the subfolder build path
 COPY --from=builder /build/matching-engine/engine /app/engine
 
 RUN chmod 555 /app/engine \

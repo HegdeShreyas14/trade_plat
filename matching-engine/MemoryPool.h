@@ -45,8 +45,6 @@ public:
     }
 
     ~MemoryPool() {
-        // Warning: if objects require destruction, manual sweeping might be 
-        // needed if pointers were not gracefully returned to the pool and destructed by callers.
     }
 
     template <typename... Args>

@@ -1,18 +1,30 @@
-# ==========================================
-# C++ Build Artifacts & Binaries
-# ==========================================
-# Ignore intermediate object files and debug dumps
+# C++ build artifacts
 *.o
 *.obj
 *.debug
 *.d
-
-# Ignore the compiled final binary engines
 matching-engine/engine
+matching-engine/engine_*
 
-# ==========================================
-# Runtime Telemetry Logs & Performance Metrics
-# ==========================================
-# Ignore all generated benchmarking logs
+# Runtime logs
 *.log
-matching-engine/engine_bench*.log
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Frontend build output and dependencies
+leaderboard/node_modules/
+leaderboard/dist/
+node_modules/
+package-lock.json
+
+# Testing / debug artifacts
+submission_test/
+BUILD_RUN_REPORT.md
+sample_bot.zip
+
+# AI tool workspace dirs
+.agents/
+.codex/

@@ -65,7 +65,7 @@ graph TD
 
 The platform utilizes a customized **Kubernetes Orchestration Controller** via the native `kubernetes-client` Python SDK. Instead of exposing the host operating system to arbitrary contestant code executions, the orchestrator walks through unzipped workspaces recursively, identifies the source language rules, and multi-stage compiles an unprivileged container on the fly.
 
-These sandboxed containers are dropped directly into a rigid Kubernetes `Namespace` wrapped inside an strict egress `NetworkPolicy`. This prison mesh blocks all external internet requests, while bridging an internal loopback tunnel (`10.0.2.2:8080`) straight to the matching engine core, ensuring deterministic throughput without network contamination.
+These sandboxed containers are dropped directly into a rigid Kubernetes `Namespace` wrapped inside a strict egress `NetworkPolicy`. This prison mesh blocks all external internet requests, while bridging back to the matching engine on the host via the `EXCHANGE_HOST` gateway address (default `10.0.2.2` for VM-based Minikube drivers; configurable for the Docker driver — see setup instructions).
 
 ## Key Features
 
@@ -81,70 +81,68 @@ These sandboxed containers are dropped directly into a rigid Kubernetes `Namespa
 ### Prerequisites
 
 1. **Linux Host Environment** (Ubuntu/Debian or Arch Linux)
-2. **Docker Engine** and **Docker Compose**
-3. **Minikube** installed and verified on your local system path.
-4. **Python 3.11+** and **G++ Compiler** (supporting C++17/C++20 layout flags).
+2. **Docker Engine** and **Docker Compose** (v2)
+3. **Minikube** installed and on your system path
+4. **Python 3.11+** with `pip` (for the orchestrator, which runs on the host)
 
-### Local Development
+### Startup
 
-1. **Clone and Install System Dependencies**
+**Step 1 — Install orchestrator dependencies**
 ```bash
-git clone [https://github.com/HegdeShreyas14/trade_plat.git](https://github.com/HegdeShreyas14/trade_plat.git)
+git clone https://github.com/HegdeShreyas14/trade_plat.git
 cd trade_plat
-
-# Install backend python execution frameworks
-pip install -r telemetry/requirements.txt
 pip install -r infra/requirements.txt
-
 ```
 
+**Step 2 — Start Minikube and point Docker at its daemon**
 
-2. **Initialize Virtual Cluster Infrastructure**
+The matching engine image must be built inside Minikube's Docker daemon so K8s can pull it without a registry. Run these two commands **before** `docker compose`:
 ```bash
-# Spin up single-node cluster utilizing your docker runtime
 minikube start --driver=docker
-
-# CRITICAL STEP: Configure current terminal shell variables to map to Minikube's Docker daemon
 eval $(minikube docker-env)
+```
 
-# Bring up background caching brokers and event message channels
+> **Docker driver on Linux only:** the default host gateway address `10.0.2.2` does not apply with this driver. Export the correct host IP so bot pods can reach the matching engine:
+> ```bash
+> export EXCHANGE_HOST=$(minikube ssh -- ip route show default | awk '{print $3}')
+> ```
+
+**Step 3 — Bring up the full stack**
+```bash
 docker compose up -d
-
 ```
 
+This single command builds and starts everything:
+- Apache Kafka + Zookeeper
+- Redis
+- C++ matching engine (port 8080)
+- Telemetry / scoring API (port 8000)
+- React leaderboard frontend (port 5173)
 
-3. **Build and Run the C++ Matching Engine**
-```bash
-cd matching-engine/
-g++ -std=c++17 -O3 -DNDEBUG -pthread main.cpp MatchingEngine.cpp Order.cpp networking/TCPServer.cpp -o engine
-./engine
-
-```
-
-
-4. **Launch the Telemetry & API Framework**
-Open a separate terminal pane (**ensuring you re-run `eval $(minikube docker-env)` inside it to inherit Minikube's context**):
-```bash
-# Start the continuous event streaming consumer ingester
-python3 telemetry/ingester.py --disable-timescale
-
-# Run the hot-reloading FastAPI application gateway bounded to localhost
-uvicorn telemetry.api:app --host localhost --port 8000 --reload
-
-```
-
-
-5. **Start the Frontend Dashboard**
-```bash
-cd frontend/
-npm install
-npm run dev -- --force
-
-```
-
+Wait ~30 seconds for Kafka to become healthy, then open:
 
 * **Dashboard UI:** http://localhost:5173
 * **Gateway API:** http://localhost:8000
+
+### Submitting a bot
+
+1. Open http://localhost:5173
+2. Enter a unique contestant name in the text field
+3. Upload a `.zip` containing your trading logic
+
+The zip must include:
+- `sandbox_sdk.py` — copied from `sample_bot/sandbox_sdk.py` (platform harness, do not modify)
+- `solution.py` — your code; must define `on_market_update(market_tick, exchange)`
+- `requirements.txt` — any extra pip dependencies
+
+The `on_market_update` callback receives a simulated market tick and an `exchange` handle. Call `exchange.submit_order("BUY" | "SELL", price, quantity)` to place orders. Scores appear on the leaderboard in real time.
+
+### Checking service health
+```bash
+docker compose ps
+docker compose logs matching-engine
+docker compose logs telemetry-api
+```
 
 
 

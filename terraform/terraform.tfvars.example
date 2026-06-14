@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────
+# COPY THIS FILE TO terraform.tfvars AND CUSTOMIZE FOR YOUR SETUP
+# ─────────────────────────────────────────────────────────────────
+
+# GCP Configuration
+project_id       = "trading-platform-hft-12345"  # Change to a unique project ID
+project_name     = "HFT Trading Platform"
+gcp_region       = "us-central1"
+environment      = "prod"
+
+# Billing Account (optional - only if creating brand new project)
+# Find your billing account ID at: https://console.cloud.google.com/billing/accounts
+billing_account_id = ""
+
+# Network & Security
+# ⚠️  IMPORTANT: In production, restrict SSH access to your IP only!
+# Example: allowed_ssh_cidr = ["203.0.113.25/32"]
+allowed_ssh_cidr = ["0.0.0.0/0"]  # Change this for production!
+
+# Redis Configuration (Memorystore)
+redis_tier     = "basic"     # Use "basic" for dev/staging, "standard" for high availability
+redis_memory_gb = 2          # Adjust based on expected load (2GB min)
+
+# Matching Engine (Compute Engine VM)
+# - n2-standard-4: 4 vCPUs, 16GB RAM, $0.19/hour (~$140/month)
+# - n2-standard-8: 8 vCPUs, 32GB RAM, $0.38/hour (~$280/month)
+# Choose based on expected contestant load
+matching_engine_machine_type = "n2-standard-4"
+
+# Docker Images
+# You'll push these to Google Artifact Registry or use Docker Hub
+# Format: gcr.io/PROJECT_ID/IMAGE_NAME:TAG
+# or     gcr.io/PROJECT_ID/IMAGE_NAME:latest
+# or     docker.io/your-username/IMAGE_NAME:latest
+matching_engine_image = "gcr.io/trading-platform-hft-12345/matching-engine:latest"
+telemetry_api_image   = "gcr.io/trading-platform-hft-12345/telemetry-api:latest"
+
+# Kafka Configuration
+# Local/self-hosted: "kafka:29092" (if running in GKE)
+# Confluent Cloud: "pkc-xxxxx.region.provider.confluent.cloud:9092"
+kafka_brokers = "kafka:29092"
+
+# Labels to tag all resources
+labels = {
+  project     = "trading-platform"
+  environment = "production"
+  managed_by  = "terraform"
+  team        = "platform"
+}

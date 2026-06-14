@@ -1,0 +1,16 @@
+.git
+.codex
+.agents
+**/__pycache__
+**/*.pyc
+matching-engine/engine
+matching-engine/engine_*
+matching-engine/*.o
+matching-engine/*.log
+matching-engine/debug_server.debug
+node_modules
+leaderboard/node_modules
+leaderboard/dist
+BUILD_RUN_REPORT.md
+sample_bot.zip
+submission_test/

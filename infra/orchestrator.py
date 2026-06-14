@@ -267,10 +267,11 @@ class BenchmarkOrchestrator:
         """Spawns the user's compiled dynamic agent container inside the network jail."""
         if not image_tag:
             image_tag = "contestant-agent:anonymous_quant_bot"
-            
-        # FIX: Point Minikube containers straight to your physical local host machine machine pipeline gateway IP
-        # 10.0.2.2 is the default virtual router gateway address mapping back to localhost from inside minikube pods
-        target_host = "10.0.2.2"
+
+        # Host IP as seen from inside Minikube pods. Default 10.0.2.2 works for VM-based
+        # drivers (VirtualBox, KVM). Docker driver on Linux: set EXCHANGE_HOST to the
+        # docker0 bridge address, e.g. `minikube ssh -- ip route show default | awk '{print $3}'`
+        target_host = os.getenv("EXCHANGE_HOST", "10.0.2.2")
         
         pod = self.client.V1Pod(
             metadata=self.client.V1ObjectMeta(
@@ -359,29 +360,59 @@ class BenchmarkOrchestrator:
         print("[cleanup] reaping benchmark resources")
         self.delete_old_sandbox_pod(wait=False)
 
+    def start_scoring_engine(self, contestant_id, duration):
+        """Launch a per-evaluation scoring engine subprocess. Returns the Popen handle."""
+        kafka_brokers = os.getenv("KAFKA_BROKERS", "localhost:9092")
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        # Use offset-reset=latest so we only score trades produced during THIS evaluation,
+        # not leftover messages from prior runs. Use a unique group-id per run so the
+        # consumer always starts from the latest offset even on restart.
+        group_id = f"scoring-{contestant_id}-{int(time.time())}"
+        cmd = [
+            sys.executable, "-u",
+            os.path.join(self.repo_root, "telemetry", "scoring_engine.py"),
+            "--kafka-brokers", kafka_brokers,
+            "--topic", os.getenv("KAFKA_TOPIC", "trade-events"),
+            "--group-id", group_id,
+            "--offset-reset", "latest",
+            "--contestant-id", contestant_id,
+            "--redis-url", redis_url,
+            "--window-seconds", "10",
+            "--metrics-interval-ms", "1000",
+        ]
+        print(f"[scoring] starting scoring engine for contestant={contestant_id}")
+        return subprocess.Popen(cmd)
+
     def run(self, args):
         self.connect()
         target_workspace = os.path.join("/tmp/sandbox_uploads", args.sub_id)
-        
+
         if not os.path.exists(target_workspace):
             print(f"[warning] Workspace target {target_workspace} missing. Operating on repo root.")
             target_workspace = self.repo_root
 
+        scoring_proc = None
         try:
             self.ensure_namespace()
-            self.ensure_exchange_service()
             self.ensure_network_policy()
-            
-            # 1. Boot up matching loop infrastructure if needed inside the cluster
-            self.deploy_exchange_core(args.cpu, args.memory)
-            
-            # 2. Compile user package against dynamic polyglot wrapper parameters
+
+            # Compile the contestant's submission and build a container image
             contestant_image = self.auto_detect_and_build(target_workspace, args.sub_id)
-            
-            # 3. Drop agent into Kubernetes NetworkPolicy isolation container cell
+
+            # Start a dedicated scoring engine for this contestant before the pod launches
+            # so it catches all trade events produced during the evaluation window.
+            scoring_proc = self.start_scoring_engine(args.sub_id, args.duration)
+
+            # Deploy the contestant's container into the K8s network-policy sandbox
             self.spawn_contestant_sandbox_pod(contestant_image, args.duration)
             self.wait_for_agent_completion(args.duration + 30)
         finally:
+            if scoring_proc is not None:
+                scoring_proc.terminate()
+                try:
+                    scoring_proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    scoring_proc.kill()
             if not args.keep_resources:
                 self.cleanup()
 

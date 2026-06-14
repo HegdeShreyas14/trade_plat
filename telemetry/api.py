@@ -111,7 +111,6 @@ async def receive_submission(
             
         os.remove(zip_file_path)
 
-        # ASYNC UPGRADE: Execute orchestrator using non-blocking sub-processes
         cmd_args = ["infra/orchestrator.py", "--sub-id", contestant_id]
         
         async def run_detached_orchestrator():
@@ -124,7 +123,6 @@ async def receive_submission(
             await process.wait()  
             print(f"[api-gateway] Orchestration sequence completed for {contestant_id}.")
 
-        # Dispatch task immediately into event loop to prevent server starvation timeouts
         asyncio.create_task(run_detached_orchestrator())
 
         return {

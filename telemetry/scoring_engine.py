@@ -215,31 +215,30 @@ def main():
     try:
         while running:
             msg = consumer.poll(0.05)
-            if msg is None:
-                continue
-            if msg.error():
-                raise KafkaException(msg.error())
+            if msg is not None:
+                if msg.error():
+                    raise KafkaException(msg.error())
 
-            for event in unpack_trade_events(msg.value()):
-                violation = state.validate(event)
-                if violation:
-                    metrics = disqualify(
-                        redis_client,
-                        args.contestant_id,
-                        state,
-                        violation,
-                        args.channel,
-                        args.leaderboard_key,
-                    )
-                    print(json.dumps({"status": "disqualified", **metrics}, separators=(",", ":")))
-                    return
-                state.accept(event)
+                for event in unpack_trade_events(msg.value()):
+                    violation = state.validate(event)
+                    if violation:
+                        metrics = disqualify(
+                            redis_client,
+                            args.contestant_id,
+                            state,
+                            violation,
+                            args.channel,
+                            args.leaderboard_key,
+                        )
+                        print(json.dumps({"status": "disqualified", **metrics}, separators=(",", ":")), flush=True)
+                        return
+                    state.accept(event)
 
             now = time.monotonic()
             if now - last_metrics >= args.metrics_interval_ms / 1000:
                 metrics = state.metrics()
                 publish_metrics(redis_client, args.contestant_id, metrics, args.channel, args.leaderboard_key)
-                print(json.dumps({"status": "ok", **metrics}, separators=(",", ":")))
+                print(json.dumps({"status": "ok", **metrics}, separators=(",", ":")), flush=True)
                 last_metrics = now
     finally:
         consumer.close()

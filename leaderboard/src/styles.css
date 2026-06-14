@@ -1,0 +1,423 @@
+/* ==========================================================================
+   1. CORE THEME VARIABLE INVARIANTS (Light Mode Default)
+   ========================================================================== */
+:root, [data-theme="light"] {
+  --canvas-bg: #f5f7f4;
+  --topbar-gradient: linear-gradient(180deg, rgba(213, 229, 220, 0.55), rgba(245, 247, 244, 0) 320px);
+  --panel-bg: rgba(255, 255, 255, 0.9);
+  --border-primary: #d7dfda;
+  --border-secondary: #e2e8e4;
+  --text-main: #18211f;
+  --text-headers: #101614;
+  --text-muted: #5d6b66;
+  --text-sub: #697671;
+  --stat-icon-bg: #e6f1ec;
+  --stat-icon-color: #2f7865;
+  --pill-bg: #ffffff;
+  --pill-border: #ccd8d2;
+  --table-hover: #f6faf8;
+  --chart-grid: #dfe6e2;
+  
+  /* Upload Zone UI Overrides */
+  --upload-zone-bg: rgba(47, 120, 101, 0.02);
+  --upload-zone-hover: rgba(47, 120, 101, 0.06);
+}
+
+/* ==========================================================================
+   2. HIGH-CONTRAST OVAL-DARK OVERRIDES (Dark Mode)
+   ========================================================================== */
+[data-theme="dark"] {
+  --canvas-bg: #0b0f0e;
+  --topbar-gradient: linear-gradient(180deg, rgba(23, 35, 30, 0.6), rgba(11, 15, 14, 0) 320px);
+  --panel-bg: rgba(16, 24, 22, 0.95);
+  --border-primary: #22302a;
+  --border-secondary: #1a2421;
+  --text-main: #e2e8e5;
+  --text-headers: #f0f4f2;
+  --text-muted: #82928c;
+  --text-sub: #99aab2;
+  --stat-icon-bg: #142e26;
+  --stat-icon-color: #4ade80;
+  --pill-bg: #121b18;
+  --pill-border: #22302a;
+  --table-hover: #131d1a;
+  --chart-grid: #22302a;
+  
+  --upload-zone-bg: rgba(74, 222, 128, 0.01);
+  --upload-zone-hover: rgba(74, 222, 128, 0.04);
+}
+
+/* ==========================================================================
+   3. STRUCTURAL GLOBAL LAYOUT RULES
+   ========================================================================== */
+:root {
+  color: var(--text-main);
+  background: var(--canvas-bg);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  transition: background 0.2s, color 0.2s;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--topbar-gradient), var(--canvas-bg);
+  transition: background 0.2s;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.shell {
+  width: min(1440px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 28px 0 40px;
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.eyebrow {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1, h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+h1 {
+  color: var(--text-headers);
+  font-size: 44px;
+  line-height: 1.05;
+}
+
+h2 {
+  color: var(--text-main);
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ==========================================================================
+   4. SCOREBOARD STRUCTURAL RENDERING UTILITIES
+   ========================================================================== */
+.status-pill,
+.correctness {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--pill-border);
+  border-radius: 8px;
+  background: var(--pill-bg);
+  white-space: nowrap;
+}
+
+.status-pill.connected {
+  color: #176b53;
+  border-color: #9fc9b8;
+}
+
+[data-theme="dark"] .status-pill.connected {
+  color: #4ade80;
+  border-color: #142e26;
+  background: rgba(20, 46, 38, 0.3);
+}
+
+.status-pill.offline {
+  color: #90522c;
+  border-color: #d7b495;
+}
+
+[data-theme="dark"] .status-pill.offline {
+  color: #fb923c;
+  border-color: #3c2012;
+  background: rgba(60, 32, 18, 0.3);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.stat,
+.panel {
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  box-shadow: 0 12px 30px rgba(31, 44, 38, 0.04);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 88px;
+  padding: 16px;
+}
+
+.stat-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  color: var(--stat-icon-color);
+  background: var(--stat-icon-bg);
+}
+
+.stat.gold .stat-icon {
+  color: #9a6619;
+  background: #f7ead0;
+}
+
+[data-theme="dark"] .stat.gold .stat-icon {
+  color: #fbbf24;
+  background: #2e2209;
+}
+
+.stat span,
+.panel-title span {
+  display: block;
+  color: var(--text-sub);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.stat strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-headers);
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.panel {
+  padding: 18px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.chart-panel {
+  min-height: 344px;
+}
+
+.table-panel {
+  padding-bottom: 10px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 13px 12px;
+  border-bottom: 1px solid var(--border-secondary);
+  color: var(--text-main);
+  text-align: right;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+th {
+  color: var(--text-sub);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+th:nth-child(1),
+th:nth-child(2),
+th:nth-child(3),
+td:nth-child(1),
+td:nth-child(2),
+td:nth-child(3) {
+  text-align: left;
+}
+
+tbody tr:hover {
+  background: var(--table-hover);
+}
+
+.contestant {
+  max-width: 280px;
+  overflow: hidden;
+  color: var(--text-headers);
+  font-weight: 800;
+  text-overflow: ellipsis;
+}
+
+.correctness {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.correctness.passed {
+  color: #176b53;
+  background: #edf7f2;
+}
+
+[data-theme="dark"] .correctness.passed {
+  color: #4ade80;
+  background: #142e26;
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.correctness.failed {
+  color: #9a3f2f;
+  background: #fff1ec;
+}
+
+[data-theme="dark"] .correctness.failed {
+  color: #f87171;
+  background: #2d1916;
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+.empty {
+  height: 120px;
+  color: var(--text-sub);
+  text-align: center;
+}
+
+/* ==========================================================================
+   5. EXTRACTED CHART GRAPH OVERRIDES (Recharts Routing)
+   ========================================================================== */
+.recharts-cartesian-grid line {
+  stroke: var(--chart-grid);
+}
+
+.recharts-text {
+  fill: var(--text-sub);
+}
+
+.recharts-tooltip-wrapper {
+  outline: none;
+}
+
+/* ==========================================================================
+   6. CUSTOM UPLOAD ZONE DESIGN SCHEMATICS
+   ========================================================================== */
+.upload-dropzone {
+  flex: 1 1 400px;
+  display: flex;
+  flex-direction: column;
+  alignItems: center;
+  justify-content: center;
+  padding: 1.5rem;
+  border: 2px dashed var(--border-primary);
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--upload-zone-bg);
+  transition: all 0.2s;
+}
+
+.upload-dropzone:hover {
+  border-color: var(--stat-icon-color);
+  background: var(--upload-zone-hover);
+}
+
+/* ==========================================================================
+   7. RESPONSIVE COMPONENT MATRIX RULES
+   ========================================================================== */
+@media (max-width: 980px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .stats-grid,
+  .dashboard-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .shell {
+    width: min(100vw - 20px, 1440px);
+    padding-top: 18px;
+  }
+
+  .topbar-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel {
+    padding: 14px;
+  }
+
+  .stat strong {
+    font-size: 21px;
+  }
+
+  h1 {
+    font-size: 32px;
+  }
+}

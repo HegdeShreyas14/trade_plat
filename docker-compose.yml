@@ -40,7 +40,9 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      # Published only for host-side tooling. A system redis-server commonly owns
+      # 6379 already -- set REDIS_HOST_PORT to sidestep the collision.
+      - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -74,6 +76,30 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
     depends_on:
+      redis:
+        condition: service_healthy
+    restart: on-failure
+
+  # Consumes trade-events off Kafka, validates them, and publishes rolling
+  # TPS/latency metrics into Redis for the leaderboard to read.
+  scoring-engine:
+    build:
+      context: .
+      dockerfile: telemetry/Dockerfile
+    command: ["python3", "-u", "telemetry/scoring_engine.py"]
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_TOPIC: trade-events
+      REDIS_URL: redis://redis:6379/0
+      CONTESTANT_ID: ${CONTESTANT_ID:-baseline-engine}
+      WINDOW_SECONDS: ${WINDOW_SECONDS:-1.0}
+      METRICS_INTERVAL_MS: ${METRICS_INTERVAL_MS:-1000}
+      # Metrics are windowed on arrival wall-clock, so replaying history from
+      # 'earliest' would report a meaningless burst. Score what's live instead.
+      KAFKA_OFFSET_RESET: latest
+    depends_on:
+      kafka:
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: on-failure

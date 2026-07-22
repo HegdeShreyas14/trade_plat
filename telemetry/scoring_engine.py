@@ -24,6 +24,10 @@ except ImportError:  # pragma: no cover
 TRADE_EVENT_FORMAT = "<QQQQQQdI"
 TRADE_EVENT_SIZE = struct.calcsize(TRADE_EVENT_FORMAT)
 
+# Execution prices are doubles derived from float order prices, so priority
+# comparisons need a tolerance rather than exact ordering.
+PRICE_EPSILON = 1e-9
+
 
 @dataclass(frozen=True)
 class TradeEvent:
@@ -50,6 +54,50 @@ class ContestantState:
         self.samples = deque()
         self.correctness = "PASSED"
         self.total_events = 0
+        self.prev_event = None
+
+    def check_price_priority(self, event):
+        """Detect a match that skipped a better-priced resting order.
+
+        Two consecutive trades sharing exactly one order id pin that order down to
+        one of two roles, and both roles constrain the price in the same direction:
+
+          * It is the taker, sweeping through resting levels. A buy taker must
+            consume the cheapest ask first, so prices ascend; a sell taker must
+            consume the highest bid first, so prices descend.
+          * It is the maker, being hit by a succession of takers. Execution then
+            happens at its own limit price, which cannot change, so prices are flat.
+
+        A common buy order therefore may never trade lower than it just did, and a
+        common sell order may never trade higher. Breaking that means a better-priced
+        order on the book was passed over. Because flat prices satisfy both bounds,
+        the maker case never trips the check.
+
+        Note this proves the *price* half of price-time priority only. Time priority
+        within a single level is not decidable here: the trade event carries no
+        arrival sequence for the resting side, so two orders at the same price are
+        indistinguishable from the outbound stream.
+        """
+        prev = self.prev_event
+        if prev is None:
+            return None
+
+        same_buy = event.buy_order_id == prev.buy_order_id
+        same_sell = event.sell_order_id == prev.sell_order_id
+
+        # Both ids shared means neither side was exhausted by the previous match,
+        # and both differing means these trades are unrelated. Neither constrains price.
+        if same_buy and not same_sell and event.price < prev.price - PRICE_EPSILON:
+            return (
+                f"CRITICAL_ERR: PRICE_PRIORITY buy_order={event.buy_order_id} "
+                f"traded {prev.price} then {event.price}; a cheaper ask was available"
+            )
+        if same_sell and not same_buy and event.price > prev.price + PRICE_EPSILON:
+            return (
+                f"CRITICAL_ERR: PRICE_PRIORITY sell_order={event.sell_order_id} "
+                f"traded {prev.price} then {event.price}; a higher bid was available"
+            )
+        return None
 
     def validate(self, event):
         if self.last_match_id is not None and event.match_id != self.last_match_id + 1:
@@ -68,12 +116,13 @@ class ContestantState:
             return "CRITICAL_ERR: INVALID_PRICE"
         if event.qty <= 0:
             return "CRITICAL_ERR: INVALID_QTY"
-        return None
+        return self.check_price_priority(event)
 
     def accept(self, event):
         now = time.monotonic()
         self.last_match_id = event.match_id
         self.last_t2_ns = event.t2_ns
+        self.prev_event = event
         self.order_fills[event.buy_order_id] = self.order_fills.get(event.buy_order_id, 0) + event.qty
         self.order_fills[event.sell_order_id] = self.order_fills.get(event.sell_order_id, 0) + event.qty
         self.samples.append((now, event.engine_latency_ns))
@@ -157,19 +206,56 @@ def disqualify(redis_client, contestant_id, state, reason, channel, leaderboard_
 
 def run_self_test():
     now = time.time_ns()
-    state = ContestantState(window_seconds=1.0)
-    events = [
-        TradeEvent(1, 100, 200, now - 5000, now - 2000, now, 10.0, 5),
-        TradeEvent(2, 100, 201, now - 5000, now - 2000, now + 1000, 10.0, 3),
-    ]
-    for event in events:
-        violation = state.validate(event)
-        if violation:
-            raise AssertionError(violation)
-        state.accept(event)
 
-    bad = TradeEvent(4, 100, 201, now - 5000, now - 2000, now + 2000, 10.0, 1)
-    assert state.validate(bad).startswith("CRITICAL_ERR: MATCH_SEQUENCE")
+    def ev(match_id, buy_id, sell_id, price, qty=5):
+        # t2 tracks match_id so events never look retrograde to the structural checks.
+        return TradeEvent(match_id, buy_id, sell_id, now - 5000, now - 2000,
+                          now + match_id * 1000, price, qty)
+
+    def feed(state, events):
+        """Push events through validate/accept, returning the first violation."""
+        for event in events:
+            violation = state.validate(event)
+            if violation:
+                return violation
+            state.accept(event)
+        return None
+
+    # Structural: a gap in the match sequence is still fatal.
+    state = ContestantState(window_seconds=1.0)
+    assert feed(state, [ev(1, 100, 200, 10.0), ev(2, 100, 201, 10.0)]) is None
+    assert state.validate(ev(4, 100, 202, 10.0)).startswith("CRITICAL_ERR: MATCH_SEQUENCE")
+
+    # A buy taker sweeping asks pays progressively more -- legal.
+    state = ContestantState(window_seconds=1.0)
+    assert feed(state, [ev(1, 100, 200, 10.0), ev(2, 100, 201, 10.5),
+                        ev(3, 100, 202, 11.0)]) is None
+
+    # The same buy order trading cheaper means a cheaper ask was skipped.
+    state = ContestantState(window_seconds=1.0)
+    violation = feed(state, [ev(1, 100, 200, 10.5), ev(2, 100, 201, 10.0)])
+    assert violation and violation.startswith("CRITICAL_ERR: PRICE_PRIORITY"), violation
+
+    # A sell taker sweeping bids receives progressively less -- legal.
+    state = ContestantState(window_seconds=1.0)
+    assert feed(state, [ev(1, 200, 100, 11.0), ev(2, 201, 100, 10.5),
+                        ev(3, 202, 100, 10.0)]) is None
+
+    # The same sell order trading higher means a higher bid was skipped.
+    state = ContestantState(window_seconds=1.0)
+    violation = feed(state, [ev(1, 200, 100, 10.0), ev(2, 201, 100, 10.5)])
+    assert violation and violation.startswith("CRITICAL_ERR: PRICE_PRIORITY"), violation
+
+    # A resting order hit by successive takers trades flat at its own limit.
+    state = ContestantState(window_seconds=1.0)
+    assert feed(state, [ev(1, 100, 200, 10.0), ev(2, 100, 201, 10.0),
+                        ev(3, 100, 202, 10.0)]) is None
+
+    # Unrelated trades share no order id, so price may move either way.
+    state = ContestantState(window_seconds=1.0)
+    assert feed(state, [ev(1, 100, 200, 10.5), ev(2, 101, 201, 9.0),
+                        ev(3, 102, 202, 12.0)]) is None
+
     print(json.dumps({"passed": True, "metrics": state.metrics()}, indent=2))
 
 

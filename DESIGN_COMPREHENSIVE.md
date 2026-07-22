@@ -35,7 +35,8 @@
 The HFT Market Simulator is a real-time distributed trading platform for evaluating algorithmic trading agents across multiple programming languages (Python, Rust, Go, C++). It provides:
 
 - **Automated Containerization**: Compile and sandbox polyglot submissions without manual intervention
-- **Low-Latency Matching**: Native C++ exchange engine with sub-microsecond matching
+- **Low-Latency Matching**: Native C++ exchange engine matching in single-digit microseconds
+  (measured P50 3.56 µs, P99 16.62 µs — see `results/`)
 - **Distributed Evaluation**: Kubernetes-based isolation ensuring contestant code cannot escape sandbox
 - **Live Telemetry**: Real-time scoring, latency analytics, and order book visualization
 - **Fair Competition**: Deterministic scoring based on throughput (TPS) and latency (P99)
@@ -2061,13 +2062,16 @@ def validate_submission(extracted_dir: str) -> bool:
 
 - [x] **Matching Engine (C++)**: Lock-free MPSC queues, epoll event loop, CPU pinning, sub-100µs P99 latency
 - [x] **WebSocket Protocol**: Full RFC 6455 implementation, binary frame support, client masking
-- [x] **Order Book**: Buy/sell sides with O(1) cancellation via lookup map
+- [x] **Order Book**: Buy/sell sides with an O(1) lookup map locating any resting order.
+  Removal itself is O(level size) — the price level is a contiguous vector, so erasing
+  shifts the orders behind it and their recorded positions are refreshed to match. See
+  Known Limitation 8: the cancel entry point this map exists to serve has no caller yet.
 - [x] **Telemetry Ingestion**: Kafka producer (librdkafka), trade batching, SPSC queue
 - [x] **Scoring Engine (Python)**: Kafka consumer, correctness validation, sliding-window metrics, Redis output
 - [x] **API Gateway (FastAPI)**: Upload endpoint, leaderboard query, SSE streaming
 - [x] **Real-Time Dashboard (React)**: Live leaderboard table, bar charts, line charts, theme toggle
 - [x] **Kubernetes Orchestration**: Pod spawning, namespace isolation, network policies, security contexts
-- [x] **Docker Compose (Local)**: Full stack in 6 services, dependency ordering, health checks
+- [x] **Docker Compose (Local)**: Full stack in 7 services, dependency ordering, health checks
 - [x] **Sandbox Security**: Pod Security Standard ("restricted"), capability dropping, read-only root FS
 - [x] **Multi-Language Support**: Auto-detection (Python/Rust/Go/C++), Dockerfile generation
 
@@ -2078,6 +2082,27 @@ def validate_submission(extracted_dir: str) -> bool:
 3. **No TLS**: Local development assumes trusted network
 4. **Clock Synchronization**: t0-t1 network latency requires NTP if distributed
 5. **No Replay**: Can't re-run scoring on historical trades (Kafka has data, but no UI)
+6. **Time Priority Is Not Validated**: The scoring engine verifies the *price* half of
+   price-time priority — a match that skipped a better-priced resting order is caught,
+   because two consecutive trades sharing one order id constrain the execution price in
+   a known direction. The *time* half is undecidable from what the platform publishes:
+   `TradeEvent` carries no arrival sequence for the resting side, so two orders sitting
+   at the same price are indistinguishable in the outbound stream. An engine that fills
+   the newest resting order instead of the oldest passes validation today. Closing this
+   requires mirroring inbound orders to their own Kafka topic and replaying them through
+   a reference book — which adds a publish to the matching hot path and would move the
+   measured latency figures.
+7. **Fill Accuracy Cannot Be Checked Against Submitted Quantity**: The 60-byte
+   `TradeEvent` wire frame carries only the traded quantity, never the quantity the order
+   was submitted with. The scoring engine can therefore accumulate fills per order id but
+   has no bound to check them against, so an engine that over-fills an order beyond its
+   size is not detectable from telemetry. Same fix as above: the inbound order stream has
+   to be observable before this invariant can be evaluated.
+8. **Order Cancellation Is Unreachable**: `MatchingEngine::cancelOrder` is implemented
+   and its index bookkeeping is now correct and unit-tested, but nothing calls it. The
+   `OrderMessage` wire frame has no cancel message type — `side` only distinguishes buy
+   from sell — so no client can request a cancellation. The order book's `orderMap` is
+   maintained on every insert and fill to support a path that cannot currently be invoked.
 
 ### Future Enhancements
 
@@ -2098,23 +2123,36 @@ def validate_submission(extracted_dir: str) -> bool:
 - [ ] Test full stack locally (`docker compose up`)
 - [ ] Verify leaderboard SSE updates in browser
 - [ ] Test Kubernetes pod isolation (try escaping)
-- [ ] Load test with bot-fleet (170 concurrent connections)
-- [ ] Verify Kafka event ordering (no gaps in match_id)
+- [x] Load test with bot-fleet (170 concurrent connections) — 5 runs x 60s, results in
+      `results/`; median 7,760 trades/s, P99 16.62 µs, zero drops or failures
+- [x] Verify Kafka event ordering (no gaps in match_id) — the scoring engine fails a run
+      on any `MATCH_SEQUENCE` gap; 2,143,091 events across 5 runs passed
 - [ ] Test contestant code with intentional errors (should be disqualified)
 - [ ] Check Redis memory usage under load
-- [ ] Verify scoring engine doesn't replay historical events
+- [x] Verify scoring engine doesn't replay historical events — the compose service pins
+      `KAFKA_OFFSET_RESET=latest`, and every run recorded a starting backlog of 0
 - [ ] Test orchestrator cleanup (pods fully deleted)
 - [ ] Review terraform/ for cloud deployment readiness
 
 ### Success Metrics
 
-- **P50 matching latency**: < 10 µs ✓
-- **P99 matching latency**: < 100 µs ✓
-- **Throughput**: > 5,000 TPS (single engine) ✓
-- **SSE update latency**: < 50 ms to browser ✓
-- **Zero trade loss**: All trades in Kafka match trades in Redis ✓
-- **Zero false positives**: Disqualification only on genuine violations ✓
-- **Perfect isolation**: Contest pods cannot escape sandbox ✓
+Measured against the recorded benchmark in `results/` (median of 5 runs):
+
+- **P50 matching latency**: target < 10 µs — **measured 3.56 µs** ✓
+- **P99 matching latency**: target < 100 µs — **measured 16.62 µs** ✓
+- **Throughput**: target > 5,000 TPS (single engine) — **measured 7,760 trades/s** ✓
+- **Zero order loss**: target zero drops under load — **measured 0 drops, 0 failures across
+  5 runs and 3,013,607 orders sent** ✓
+- **Zero false positives**: target disqualification only on genuine violations — **2,143,091
+  trade events validated across 5 runs with no spurious disqualification** ✓
+
+Not yet measured — these remain design targets rather than results:
+
+- **SSE update latency**: < 50 ms to browser — no instrumentation exists for this yet
+- **Zero trade loss end-to-end**: trades published to Kafka are not reconciled against what
+  lands in Redis, so loss between the two would currently go unnoticed
+- **Perfect isolation**: contest pods cannot escape the sandbox — the isolation test in the
+  deployment checklist above is still outstanding
 
 ---
 

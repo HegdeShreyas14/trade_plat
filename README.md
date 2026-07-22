@@ -9,7 +9,7 @@
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-Minikube-326CE5.svg?style=for-the-badge&logo=kubernetes)](#)
 [![Apache Kafka](https://img.shields.io/badge/Apache_Kafka-Distributed-000000.svg?style=for-the-badge&logo=apachekafka)](#)
 
-The HFT Market Simulator is a real-time distributed trading platform evaluation mesh. It automatically compiles, sandboxes, and benchmarks polyglot algorithmic trading agents (Python, C++, Go, Rust) against a low-latency native C++ matching engine loop. Telemetry is streamed dynamically to provide sub-microsecond latency analytics and order-book metrics.
+The HFT Market Simulator is a real-time distributed trading platform evaluation mesh. It automatically compiles, sandboxes, and benchmarks polyglot algorithmic trading agents (Python, C++, Go, Rust) against a low-latency native C++ matching engine loop. Telemetry is streamed dynamically to provide microsecond-resolution latency analytics and order-book metrics. The measured baseline is a P50 of 3.56 µs and a P99 of 16.62 µs of engine-internal matching latency at ~7,760 trades/s — see `results/` for the full benchmark.
 
 ---
 

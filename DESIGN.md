@@ -556,7 +556,23 @@ A standalone load testing tool — not part of the contest submission flow. Used
 - Reads a drain loop with `asyncio.open_connection` to prevent TCP buffer backpressure.
 - Uses `TCP_NODELAY` to disable Nagle's algorithm.
 
-The default fleet (50 market makers + 100 noise bots + 20 momentum bots = 170 concurrent connections) was used to produce the benchmark log files recorded in the engine logs.
+The default fleet (50 market makers + 100 noise bots + 20 momentum bots = 170 concurrent connections) is what `bench/run_loadtest.py` drives to produce the recorded benchmark results under `results/`.
+
+**Measured baseline** — median across 5 runs of 60s each, with a full stack teardown between runs, on an AMD Ryzen 9 8945HX (32 cores):
+
+| Metric | Median | Spread across runs |
+| --- | ---: | ---: |
+| Engine throughput | 7,760 trades/s | 1.07x |
+| P50 engine latency | 3.56 µs | 1.00x |
+| P90 engine latency | 8.31 µs | 1.33x |
+| P99 engine latency | 16.62 µs | 1.42x |
+| Fleet send rate | 10,658 orders/s | 1.01x |
+
+All 5 runs passed correctness validation with zero dropped or failed orders. Latency here is engine-internal (`t2 - t1`), not wire-to-wire.
+
+Two caveats belong with these numbers. First, the run does not establish a throughput ceiling: the fleet's own sleep intervals cap offered load near 11.2k orders/s, and the engine absorbed everything it was given without backpressure, so this measures latency under fixed modest load rather than capacity. Second, the figures are only meaningful with a clean stack — runs sharing a stack with accumulated Kafka backlog were observed to differ by more than 3x at P99, because catch-up consumption competes with the engine for CPU. The harness restarts the stack between runs for exactly this reason.
+
+See `results/` for the full per-run breakdown and the exact command to reproduce.
 
 ### `bot-fleet/Dockerfile`
 

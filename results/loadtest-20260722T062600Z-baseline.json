@@ -1,0 +1,184 @@
+{
+  "meta": {
+    "label": "baseline",
+    "started_at": "2026-07-22T06:26:00.840489+00:00",
+    "finished_at": "2026-07-22T06:34:34.463182+00:00",
+    "duration_s": 60,
+    "runs": 5,
+    "restart_between_runs": true,
+    "redis_host_port": "6380",
+    "bots": {
+      "mm": 50,
+      "noise": 100,
+      "momentum": 20,
+      "total": 170
+    },
+    "target": "127.0.0.1:8080",
+    "host": {
+      "platform": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "python": "3.12.3",
+      "cpu_count": 32,
+      "cpu_model": "AMD Ryzen 9 8945HX with Radeon Graphics",
+      "mem_total_kb": 15636976
+    }
+  },
+  "aggregate": {
+    "runs_completed": 5,
+    "runs_attempted": 5,
+    "correctness": "PASSED",
+    "total_fleet_drops": 0,
+    "total_fleet_fails": 0,
+    "metrics": {
+      "engine_tps_median": {
+        "min": 7410.5,
+        "median": 7760.0,
+        "max": 7961.0,
+        "spread_ratio": 1.07
+      },
+      "engine_tps_peak": {
+        "min": 7829.0,
+        "median": 8259.0,
+        "max": 8816.0,
+        "spread_ratio": 1.13
+      },
+      "p50_lat_us": {
+        "min": 3.56,
+        "median": 3.56,
+        "max": 3.56,
+        "spread_ratio": 1.0
+      },
+      "p90_lat_us": {
+        "min": 7.12,
+        "median": 8.31,
+        "max": 9.5,
+        "spread_ratio": 1.33
+      },
+      "p99_lat_us": {
+        "min": 14.25,
+        "median": 16.62,
+        "max": 20.18,
+        "spread_ratio": 1.42
+      },
+      "p99_worst_us": {
+        "min": 9670.64,
+        "median": 22006.78,
+        "max": 25392.95,
+        "spread_ratio": 2.63
+      },
+      "fleet_send_ops_median": {
+        "min": 10606.0,
+        "median": 10658.0,
+        "max": 10708.0,
+        "spread_ratio": 1.01
+      },
+      "trade_events_this_run": {
+        "min": 411963,
+        "median": 432516,
+        "max": 438596,
+        "spread_ratio": 1.06
+      }
+    }
+  },
+  "runs": [
+    {
+      "sample_count": 65,
+      "under_load_sample_count": 60,
+      "idle_samples_excluded": 5,
+      "steady_state_sample_count": 45,
+      "scoring_backlog_at_start": 0,
+      "engine_tps_median": 7961.0,
+      "engine_tps_peak": 8798.0,
+      "p50_lat_us": 3.56,
+      "p90_lat_us": 8.31,
+      "p99_lat_us": 16.62,
+      "p99_worst_us": 18396.13,
+      "correctness": "PASSED",
+      "trade_events_this_run": 434202,
+      "steady_state_score": 479.0012,
+      "fleet_send_ops_median": 10708.0,
+      "fleet_orders_sent": 603825,
+      "fleet_drops": 0,
+      "fleet_fails": 0
+    },
+    {
+      "sample_count": 66,
+      "under_load_sample_count": 60,
+      "idle_samples_excluded": 6,
+      "steady_state_sample_count": 45,
+      "scoring_backlog_at_start": 0,
+      "engine_tps_median": 7760.0,
+      "engine_tps_peak": 8259.0,
+      "p50_lat_us": 3.56,
+      "p90_lat_us": 9.5,
+      "p99_lat_us": 20.18,
+      "p99_worst_us": 25392.95,
+      "correctness": "PASSED",
+      "trade_events_this_run": 432516,
+      "steady_state_score": 384.5391,
+      "fleet_send_ops_median": 10700.0,
+      "fleet_orders_sent": 604718,
+      "fleet_drops": 0,
+      "fleet_fails": 0
+    },
+    {
+      "sample_count": 66,
+      "under_load_sample_count": 61,
+      "idle_samples_excluded": 5,
+      "steady_state_sample_count": 46,
+      "scoring_backlog_at_start": 0,
+      "engine_tps_median": 7410.5,
+      "engine_tps_peak": 7829.0,
+      "p50_lat_us": 3.56,
+      "p90_lat_us": 8.31,
+      "p99_lat_us": 20.18,
+      "p99_worst_us": 24760.13,
+      "correctness": "PASSED",
+      "trade_events_this_run": 411963,
+      "steady_state_score": 367.22,
+      "fleet_send_ops_median": 10606.0,
+      "fleet_orders_sent": 601142,
+      "fleet_drops": 0,
+      "fleet_fails": 0
+    },
+    {
+      "sample_count": 65,
+      "under_load_sample_count": 60,
+      "idle_samples_excluded": 5,
+      "steady_state_sample_count": 45,
+      "scoring_backlog_at_start": 0,
+      "engine_tps_median": 7547.0,
+      "engine_tps_peak": 8816.0,
+      "p50_lat_us": 3.56,
+      "p90_lat_us": 7.12,
+      "p99_lat_us": 15.44,
+      "p99_worst_us": 22006.78,
+      "correctness": "PASSED",
+      "trade_events_this_run": 425814,
+      "steady_state_score": 488.7953,
+      "fleet_send_ops_median": 10658.0,
+      "fleet_orders_sent": 601123,
+      "fleet_drops": 0,
+      "fleet_fails": 0
+    },
+    {
+      "sample_count": 66,
+      "under_load_sample_count": 60,
+      "idle_samples_excluded": 6,
+      "steady_state_sample_count": 45,
+      "scoring_backlog_at_start": 0,
+      "engine_tps_median": 7858.0,
+      "engine_tps_peak": 8139.0,
+      "p50_lat_us": 3.56,
+      "p90_lat_us": 7.12,
+      "p99_lat_us": 14.25,
+      "p99_worst_us": 9670.64,
+      "correctness": "PASSED",
+      "trade_events_this_run": 438596,
+      "steady_state_score": 551.4386,
+      "fleet_send_ops_median": 10644.0,
+      "fleet_orders_sent": 602799,
+      "fleet_drops": 0,
+      "fleet_fails": 0
+    }
+  ]
+}

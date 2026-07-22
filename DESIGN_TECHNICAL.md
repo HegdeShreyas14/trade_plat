@@ -462,5 +462,5 @@ The HFT Market Simulator achieves low-latency evaluation through:
 4. **Async Python orchestration** for non-blocking management
 5. **Real-time feedback** via Redis Pub/Sub and SSE
 
-The system is production-ready for local development and can scale to cloud deployments via Terraform. Key trade-offs prioritize latency and correctness over throughput ceilings and persistent storage.
+The system is production-ready for local development. A Terraform configuration for GCP is included under `terraform/`, but it has never been applied against a live project and is therefore unvalidated — cloud deployment is a designed path, not a demonstrated one. Key trade-offs prioritize latency and correctness over throughput ceilings and persistent storage.
 

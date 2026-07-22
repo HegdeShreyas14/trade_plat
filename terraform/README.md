@@ -2,6 +2,12 @@
 
 Complete Infrastructure-as-Code for deploying the HFT trading platform to Google Cloud Platform (GCP).
 
+> **Status: written but never executed.** This configuration has not been applied against a
+> live GCP project, so it is unvalidated: resource wiring, IAM scopes, quotas, and the startup
+> scripts have not been exercised end to end. Treat it as a deployment design rather than a
+> tested path, and expect to iterate on the first real `terraform apply`. The measured
+> benchmarks in `results/` were produced on local Docker Compose, not on this infrastructure.
+
 ## Architecture Overview
 
 ```

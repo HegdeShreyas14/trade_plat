@@ -228,15 +228,15 @@ void MatchingEngine::matching() {
         buy.quantity -= tradedqty;
         sell.quantity -= tradedqty;
 
-        // Instead of shifting memory with pop_front, erase the single element cleanly
-        // If the entire price level vector is exhausted, drop the map key entirely
+        // Consume the filled order off the front of its level. eraseAt refreshes the
+        // stored positions of the orders behind it, which plain erase would leave stale.
         if (buy.quantity == 0) {
             book.orderMap.erase(buy.OrderId);
-            buyVec.erase(buyVec.begin());
+            book.eraseAt(buyVec, 0);
         }
         if (sell.quantity == 0) {
             book.orderMap.erase(sell.OrderId);
-            sellVec.erase(sellVec.begin());
+            book.eraseAt(sellVec, 0);
         }
 
         if (buyVec.empty()) book.buyOrders.erase(bestBuyIt);
@@ -246,22 +246,24 @@ void MatchingEngine::matching() {
 
 void MatchingEngine::cancelOrder(int orderid) {
     auto it = book.orderMap.find(orderid);
-    if (it != book.orderMap.end()) {
-        auto loc = it->second;
-        if (loc.isBuy) {
-            auto& vec = book.buyOrders[loc.price];
-            if (loc.vector_index < vec.size()) {
-                vec.erase(vec.begin() + loc.vector_index);
-            }
-            if (vec.empty()) book.buyOrders.erase(loc.price);
-        } else {
-            auto& vec = book.sellOrders[loc.price];
-            if (loc.vector_index < vec.size()) {
-                vec.erase(vec.begin() + loc.vector_index);
-            }
-            if (vec.empty()) book.sellOrders.erase(loc.price);
-        }
-        book.orderMap.erase(it);
+    if (it == book.orderMap.end()) return;
+
+    const OrderLocation loc = it->second;
+    // Drop the tracking entry first so eraseAt only refreshes orders that survive.
+    book.orderMap.erase(it);
+
+    // Looked up rather than indexed: operator[] would materialise an empty level
+    // for a price that no longer exists, only to erase it again below.
+    if (loc.isBuy) {
+        auto levelIt = book.buyOrders.find(loc.price);
+        if (levelIt == book.buyOrders.end()) return;
+        book.eraseAt(levelIt->second, loc.vector_index);
+        if (levelIt->second.empty()) book.buyOrders.erase(levelIt);
+    } else {
+        auto levelIt = book.sellOrders.find(loc.price);
+        if (levelIt == book.sellOrders.end()) return;
+        book.eraseAt(levelIt->second, loc.vector_index);
+        if (levelIt->second.empty()) book.sellOrders.erase(levelIt);
     }
 }
 
